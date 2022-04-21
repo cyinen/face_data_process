@@ -34,7 +34,7 @@ def transcode_video_to_image(video_path, img_path):
                 if not os.path.exists(output_dir_path):
                     os.makedirs(output_dir_path)
 
-                command = ('ffmpeg -y ' + 
+                command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
                           ' -i ' + os.path.join(video_path, file_name) + ' ' +               # input file path
                           os.path.join(output_dir_path, video_name) + '_%04d.png'            # output file path, should be '#{name}_%04d.png'
                 )
@@ -73,7 +73,7 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
                 if not os.path.exists(output_dir_path):
                     os.makedirs(output_dir_path)
 
-                command = ('ffmpeg -y ' + 
+                command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
                           ' -i ' + os.path.join(video_path, file_name) + ' ' +               # input file path
                           os.path.join(output_dir_path, video_name) + '_%04d.png'            # output file path, should be '#{name}_%04d.png'
                 )
@@ -92,7 +92,7 @@ def decode_video_to_tmp_dir(video_path, video_name):
     output_raw_img_dir = os.path.join('/tmp/tmp_video', video_name)
     if not os.path.exists(output_raw_img_dir):
         os.makedirs(output_raw_img_dir)
-    decode_command = ('ffmpeg -y ' + 
+    decode_command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
         ' -i ' + video_path + ' ' +                                            # input file path
         os.path.join(output_raw_img_dir, video_name) + '_%04d.png'                  # output file path, should be '#{name}_%04d.png'
     )
@@ -372,7 +372,7 @@ class determine_crop_region_thread(threading.Thread):
                                 pil_image.save(save_crop_img_path)
 
                     # encode as video
-                    compress_command = ('ffmpeg -y -r 30 ' +
+                    compress_command = ('ffmpeg -y -loglevel error -hide_banner -nostats -r 30 ' +
                                 ' -i ' + os.path.join(output_dir_path, video_name + '-' + str(region_index) + "_%04d.png") + " " +
                                 '-vcodec libx264 -pix_fmt yuv420p ' +
                                 os.path.join(self.crop_face_path, video_name + '-' + str(region_index) + '.mp4'))
