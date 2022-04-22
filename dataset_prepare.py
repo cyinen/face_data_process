@@ -11,6 +11,7 @@ import cv2
 import traceback
 import time
 import csv
+import random
 
 import face_recognition
 from deepface import DeepFace
@@ -21,27 +22,17 @@ file_video_queue = queue.Queue()
 face_info_queue = queue.Queue()
 backends = ['opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe']
 
-def transcode_video_to_image(video_path, img_path):
-    
-    for dir_path, dir_name_list, file_name_list in os.walk(video_path):
-        for file_name in file_name_list:
-            if(any(file_name.endswith(extension) for extension in ['.mp4'])):
+def check_make_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
 
-                video_name = file_name[:-4]
+def print_run_time(run_time):
+    hour = run_time//3600
+    minute = (run_time-3600*hour)//60
+    second = run_time-3600*hour-60*minute
+    print (f'该程序运行时间：{hour}小时{minute}分钟{second}秒.')
 
-                # create output path of images
-                output_dir_path = os.path.join(img_path, video_name)
-                if not os.path.exists(output_dir_path):
-                    os.makedirs(output_dir_path)
-
-                command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
-                          ' -i ' + os.path.join(video_path, file_name) + ' ' +               # input file path
-                          os.path.join(output_dir_path, video_name) + '_%04d.png'            # output file path, should be '#{name}_%04d.png'
-                )
-                print(command)
-                os.system(command)
-
-class transcode_video_to_image_thread(threading.Thread):
+class run_command_thread(threading.Thread):
     def __init__(self, threadID):
         threading.Thread.__init__(self)
         self.threadID = threadID
@@ -53,6 +44,8 @@ class transcode_video_to_image_thread(threading.Thread):
                 print(command)
                 os.system(command)
                 file_video_queue.task_done()
+        except queue.Empty:
+            pass
         except Exception as ex:
             print("出现如下异常", type(ex), ": ", ex)
             print(traceback.format_exc())
@@ -60,7 +53,7 @@ class transcode_video_to_image_thread(threading.Thread):
             print(self.threadID, ": done!")
             return 0
 
-def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
+def transcode_video_to_image(video_path, img_path):
     
     for dir_path, dir_name_list, file_name_list in os.walk(video_path):
         for file_name in file_name_list:
@@ -70,37 +63,84 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
 
                 # create output path of images
                 output_dir_path = os.path.join(img_path, video_name)
-                if not os.path.exists(output_dir_path):
-                    os.makedirs(output_dir_path)
+                check_make_dir(output_dir_path)
 
-                command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
-                          ' -i ' + os.path.join(video_path, file_name) + ' ' +               # input file path
-                          os.path.join(output_dir_path, video_name) + '_%04d.png'            # output file path, should be '#{name}_%04d.png'
+                command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                          f' -i {os.path.join(video_path, file_name)} '               # input file path
+                          f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
+                )
+                print(command)
+                os.system(command)
+
+def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
+    for dir_path, dir_name_list, file_name_list in os.walk(video_path):
+        for file_name in file_name_list:
+            if(any(file_name.endswith(extension) for extension in ['.mp4'])):
+
+                video_name = file_name[:-4]
+
+                # create output path of images
+                output_dir_path = os.path.join(img_path, video_name)
+                check_make_dir(output_dir_path)
+
+                command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                          f' -i {os.path.join(video_path, file_name)} '               # input file path
+                          f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
                 )
                 file_video_queue.put(command)
-                
-    thread_list = []
+
     for i in range(MAX_THREAD):
-        tmp_thread = transcode_video_to_image_thread(threadID=i)
+        tmp_thread = run_command_thread(threadID=i)
         tmp_thread.start()
-        thread_list.append(tmp_thread)
 
     file_video_queue.join() # 等待所有的数据被处理完
     print("all video is encoded!")
 
+def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8):
+    begin_time = time.time()
+    qp_list = list(range(24, 38, 2))
+    for dir_path, dir_name_list, file_name_list in os.walk(video_path):
+        for file_name in file_name_list:
+            if(any(file_name.endswith(extension) for extension in ['.mp4'])):
+
+                video_name = file_name[:-4]
+
+                for down_sample_scale in [2,4]:
+                    # create output path of videos
+                    output_dir_path = os.path.join(output_video_path, 'x_down' + str(down_sample_scale))
+                    check_make_dir(output_dir_path)
+
+                    qp = random.choice(qp_list)
+
+                    command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                            f' -i {os.path.join(video_path, file_name)}'                # input file path
+                            f' -vf scale={str(1920//down_sample_scale)}:{str(1080//down_sample_scale)}' # resolution of output video, assumed all video is 1080P
+                            f' -c:v libx264 -qp {str(qp)} '                             # qp
+                            f'{os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                    )
+                    file_video_queue.put(command)
+
+    for i in range(MAX_THREAD):
+        tmp_thread = run_command_thread(threadID=i)
+        tmp_thread.start()
+
+    file_video_queue.join() # 等待所有的数据被处理完
+    print("all video is encoded!")
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
 def decode_video_to_tmp_dir(video_path, video_name):
     output_raw_img_dir = os.path.join('/tmp/tmp_video', video_name)
-    if not os.path.exists(output_raw_img_dir):
-        os.makedirs(output_raw_img_dir)
-    decode_command = ('ffmpeg -y -loglevel error -hide_banner -nostats ' + 
-        ' -i ' + video_path + ' ' +                                            # input file path
-        os.path.join(output_raw_img_dir, video_name) + '_%04d.png'                  # output file path, should be '#{name}_%04d.png'
+    check_make_dir(output_raw_img_dir)
+    decode_command = (f'ffmpeg -y -loglevel error -hide_banner -nostats ' 
+        f' -i {video_path} '                                           # input file path
+        f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'                  # output file path, should be '#{name}_%04d.png'
     )
     os.system(decode_command)
     return output_raw_img_dir
 
 def rm_video_dir(path):
-    command = ('rm -rf ' + path)
+    command = (f'rm -rf {path}')
     os.system(command)
 
 """
@@ -179,8 +219,7 @@ class get_face_box_thread(threading.Thread):
 
                                     # uncomments this code to visualize the face location
                                     # output_dir_path = os.path.join(self.faces_locations_path, video_name)
-                                    # if not os.path.exists(output_dir_path):
-                                    #     os.makedirs(output_dir_path)
+                                    # check_make_dir(output_dir_path)
                                     # save_img_file_path = os.path.join(output_dir_path, video_name + "_" + file_name[-8:])
                                     # pil_image = Image.fromarray(raw_image)
                                     # draw = ImageDraw.Draw(pil_image)
@@ -203,6 +242,7 @@ class get_face_box_thread(threading.Thread):
             return 0
 
 def get_face_box_multi_threads(video_dir_path, faces_locations_path, model='dlib', MAX_THREAD=8, overwrite=False, is_previous_file=True): # flag is_previous_file to divide all file to 2 GPu
+    begin_time = time.time()
     assert(model in backends)
     for dir_path, dir_name_list, file_name_list in os.walk(video_dir_path):
         file_name_list.sort()
@@ -227,6 +267,8 @@ def get_face_box_multi_threads(video_dir_path, faces_locations_path, model='dlib
 
     file_video_queue.join() # 等待所有的数据被处理完
     print("all video is processed!")
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
 
 class determine_crop_region_thread(threading.Thread):
     def __init__(self, threadID, video_path, faces_locations_path, crop_face_path):
@@ -351,8 +393,7 @@ class determine_crop_region_thread(threading.Thread):
                     top, right, bottom, left = regions[region_index]
                     # (top, right, bottom, left) = self.enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=1.5)
                     output_dir_path = os.path.join(self.crop_face_path, video_name + '-' + str(region_index))
-                    if not os.path.exists(output_dir_path):
-                        os.makedirs(output_dir_path)
+                    check_make_dir(output_dir_path)
                     for _, _, file_name_list in os.walk(output_raw_img_dir): # every image
                         file_name_list.sort()
                         for file_name in file_name_list:
@@ -372,10 +413,11 @@ class determine_crop_region_thread(threading.Thread):
                                 pil_image.save(save_crop_img_path)
 
                     # encode as video
-                    compress_command = ('ffmpeg -y -loglevel error -hide_banner -nostats -r 30 ' +
-                                ' -i ' + os.path.join(output_dir_path, video_name + '-' + str(region_index) + "_%04d.png") + " " +
-                                '-vcodec libx264 -pix_fmt yuv420p ' +
-                                os.path.join(self.crop_face_path, video_name + '-' + str(region_index) + '.mp4'))
+                    compress_command = (f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
+                                f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
+                                f' -vcodec libx264 -pix_fmt yuv420p '
+                                f' {os.path.join(self.crop_face_path, video_name)}-{str(region_index)}.mp4'
+                    )
                     os.system(compress_command)
 
                     rm_command = ('rm -rf ' + output_dir_path)
@@ -423,11 +465,7 @@ def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, c
         json.dump(output_json, fp_out, indent=4)
 
     end_time = time.time()
-    run_time = round(end_time-begin_time)
-    hour = run_time//3600
-    minute = (run_time-3600*hour)//60
-    second = run_time-3600*hour-60*minute
-    print (f'该程序运行时间：{hour}小时{minute}分钟{second}秒')
+    print_run_time(round(end_time-begin_time))
 
 def get_static_size(faces_locations_path):
     begin_time = time.time()
@@ -496,17 +534,14 @@ def get_static_size(faces_locations_path):
     print(f'{which_min}: min_face_size={min_face_size}, min_width={min_width}, min_height={min_height}.')
 
     end_time = time.time()
-    run_time = round(end_time-begin_time)
-    hour = run_time//3600
-    minute = (run_time-3600*hour)//60
-    second = run_time-3600*hour-60*minute
-    print (f'该程序运行时间：{hour}小时{minute}分钟{second}秒.')
+    print_run_time(round(end_time-begin_time))
 
 if __name__ == "__main__":
     fire.Fire()
     # example
     # python ./dataset_prepare.py transcode_video_to_image --video_path ../../data/huiguohe/deepfake_test/raw_video/ --img_path ../../data/huiguohe/deepfake_test/raw_pic/
     # python ./dataset_prepare.py transcode_video_to_image_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --img_path ../../data/huiguohe/deepfake_test/raw_pic/ --MAX_THREAD 16
+    # python ./dataset_prepare.py downsample_video_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --output_video_path ../../data/huiguohe/deepfake_test/downsample_video/ --MAX_THREAD=8
     # CUDA_VISIBLE_DEVICES=0 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=False
     # CUDA_VISIBLE_DEVICES=1 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=True
     # python ./dataset_prepare.py determine_crop_region_multi_threads --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --crop_face_path ../../data/huiguohe/deepfake_test/crop_face/ --MAX_THREAD 4
