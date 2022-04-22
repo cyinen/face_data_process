@@ -1,5 +1,4 @@
 # -- coding: utf-8 --**
-
 import threading
 import os
 import json
@@ -14,9 +13,7 @@ import csv
 import random
 
 import face_recognition
-from deepface import DeepFace
 from deepface.detectors import FaceDetector
-from pyparsing import matchOnlyAtCol
 
 file_video_queue = queue.Queue()
 face_info_queue = queue.Queue()
@@ -54,20 +51,19 @@ class run_command_thread(threading.Thread):
             return 0
 
 def transcode_video_to_image(video_path, img_path):
-    
     for dir_path, dir_name_list, file_name_list in os.walk(video_path):
         for file_name in file_name_list:
             if(any(file_name.endswith(extension) for extension in ['.mp4'])):
-
                 video_name = file_name[:-4]
 
                 # create output path of images
                 output_dir_path = os.path.join(img_path, video_name)
                 check_make_dir(output_dir_path)
 
-                command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
-                          f' -i {os.path.join(video_path, file_name)} '               # input file path
-                          f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
+                command = (
+                    f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                    f' -i {os.path.join(video_path, file_name)} '               # input file path
+                    f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
                 )
                 print(command)
                 os.system(command)
@@ -83,9 +79,10 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
                 output_dir_path = os.path.join(img_path, video_name)
                 check_make_dir(output_dir_path)
 
-                command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
-                          f' -i {os.path.join(video_path, file_name)} '               # input file path
-                          f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
+                command = (
+                    f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                    f' -i {os.path.join(video_path, file_name)} '               # input file path
+                    f' {os.path.join(output_dir_path, video_name)}_%04d.png'    # output file path, should be '#{name}_%04d.png'
                 )
                 file_video_queue.put(command)
 
@@ -105,18 +102,19 @@ def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8)
 
                 video_name = file_name[:-4]
 
-                for down_sample_scale in [2,4]:
+                for down_sample_scale in [2, 4]:
                     # create output path of videos
                     output_dir_path = os.path.join(output_video_path, 'x_down' + str(down_sample_scale))
                     check_make_dir(output_dir_path)
 
                     qp = random.choice(qp_list)
 
-                    command = (f'ffmpeg -y -loglevel error -hide_banner -nostats '
-                            f' -i {os.path.join(video_path, file_name)}'                # input file path
-                            f' -vf scale={str(1920//down_sample_scale)}:{str(1080//down_sample_scale)}' # resolution of output video, assumed all video is 1080P
-                            f' -c:v libx264 -qp {str(qp)} '                             # qp
-                            f'{os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                    command = (
+                        f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                        f' -i {os.path.join(video_path, file_name)}'                # input file path
+                        f' -vf scale={1920//down_sample_scale}:{1080//down_sample_scale}' # resolution of output video, assumed all video is 1080P
+                        f' -c:v libx264 -qp {str(qp)} '                             # qp
+                        f' {os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
                     )
                     file_video_queue.put(command)
 
@@ -132,9 +130,10 @@ def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8)
 def decode_video_to_tmp_dir(video_path, video_name):
     output_raw_img_dir = os.path.join('/tmp/tmp_video', video_name)
     check_make_dir(output_raw_img_dir)
-    decode_command = (f'ffmpeg -y -loglevel error -hide_banner -nostats ' 
-        f' -i {video_path} '                                           # input file path
-        f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'                  # output file path, should be '#{name}_%04d.png'
+    decode_command = (
+        f'ffmpeg -y -loglevel error -hide_banner -nostats ' 
+        f' -i {video_path} '                                            # input file path
+        f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'     # output file path, should be '#{name}_%04d.png'
     )
     os.system(decode_command)
     return output_raw_img_dir
@@ -146,7 +145,6 @@ def rm_video_dir(path):
 """
 This function is based on https://github.com/ageitgey/face_recognition and https://github.com/serengil/deepface
 To accelerate the infer process, you could install dlib with cuda (followed by https://gist.github.com/nguyenhoan1988/ed92d58054b985a1b45a521fcf8fa781)
-
 """
 class get_face_box_thread(threading.Thread):
     def __init__(self, threadID, faces_locations_path, model="dlib", is_save_video=False):
@@ -174,7 +172,7 @@ class get_face_box_thread(threading.Thread):
                 bottom *= 2
                 left *= 2
             return top, right, bottom, left
-    
+
     def face_detect(self, img_path):
         assert(self.model in backends)
         if self.model == 'dlib':
@@ -235,7 +233,7 @@ class get_face_box_thread(threading.Thread):
         except queue.Empty:
             pass
         except Exception as ex:
-            print("出现如下异常", type(ex), ": ", ex)
+            print(f'出现如下异常{type(ex)} : {ex}')
             print(traceback.format_exc())
         finally:
             print(self.threadID, ": done!")
@@ -258,7 +256,7 @@ def get_face_box_multi_threads(video_dir_path, faces_locations_path, model='dlib
             video_path = os.path.join(video_dir_path, video_name)
             file_video_queue.put(video_path)
 
-    print("begin to process with ", MAX_THREAD, " threads, len(file_video_queue) = ", file_video_queue.qsize())
+    print(f"begin to process with {MAX_THREAD} threads, len(file_video_queue) = {file_video_queue.qsize()}")
     thread_list = []
     for i in range(MAX_THREAD):
         tmp_thread = get_face_box_thread(threadID=i, faces_locations_path=faces_locations_path, model=model)
@@ -365,7 +363,7 @@ class determine_crop_region_thread(threading.Thread):
             while(True):
                 video_path = file_video_queue.get(block=False, timeout=60)
                 video_name = os.path.split(video_path)[1][:-4]
-                print(video_name, " begin!!")
+                print(f'{video_name} begin!')
 
                 output_raw_img_dir = decode_video_to_tmp_dir(video_path, video_name)
                 face_locations_json_path = os.path.join(self.faces_locations_path, video_name + ".json")
@@ -413,14 +411,15 @@ class determine_crop_region_thread(threading.Thread):
                                 pil_image.save(save_crop_img_path)
 
                     # encode as video
-                    compress_command = (f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
-                                f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
-                                f' -vcodec libx264 -pix_fmt yuv420p '
-                                f' {os.path.join(self.crop_face_path, video_name)}-{str(region_index)}.mp4'
+                    compress_command = (
+                        f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
+                        f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
+                        f' -vcodec libx264 -pix_fmt yuv420p '
+                        f' {os.path.join(self.crop_face_path, video_name)}-{str(region_index)}.mp4'
                     )
                     os.system(compress_command)
 
-                    rm_command = ('rm -rf ' + output_dir_path)
+                    rm_command = (f'rm -rf {output_dir_path}')
                     os.system(rm_command)
 
                 rm_video_dir(output_raw_img_dir)
@@ -432,7 +431,7 @@ class determine_crop_region_thread(threading.Thread):
             print("出现如下异常", type(ex), ": ", ex)
             print(traceback.format_exc())
         finally:
-            print(self.threadID, ": done!")
+            print(f'thread_{self.threadID} : done!')
             return 0
 
 def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, crop_face_path, MAX_THREAD=8):
@@ -445,7 +444,7 @@ def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, c
             video_path = os.path.join(videos_dir_path, video_name)
             file_video_queue.put(video_path)
 
-    print("begin to process with ", MAX_THREAD, " threads, len(file_video_queue) = ", file_video_queue.qsize())
+    print(f'begin to process with {MAX_THREAD} threads, len(file_video_queue) = {file_video_queue.qsize()}')
     for i in range(MAX_THREAD):
         tmp_thread = determine_crop_region_thread(i, video_path, faces_locations_path, crop_face_path)
         tmp_thread.start()
@@ -480,7 +479,7 @@ def get_static_size(faces_locations_path):
     HEIGHT_MAX = 900
     for width_iter in range(0, WIDTH_MAX, 100):
         for height_iter in range(0, HEIGHT_MAX, 100):
-            static_dict[str(height_iter) + 'x' + str(width_iter)] = 0
+            static_dict[f'{str(height_iter)}x{str(width_iter)}'] = 0
 
     for _, _, file_name_list in os.walk(faces_locations_path):
         file_name_list.sort()
