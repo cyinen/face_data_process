@@ -5,19 +5,22 @@ import json
 import fire
 import queue
 from PIL import Image, ImageDraw
+from matplotlib.pyplot import close
 import numpy as np
 import cv2
 import traceback
 import time
 import csv
 import random
+import multiprocessing
+import math
 
 import face_recognition
 from deepface.detectors import FaceDetector
 
-file_video_queue = queue.Queue()
+file_video_queue = queue.Queue() # only used for multi-thread
 face_info_queue = queue.Queue()
-backends = ['opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe']
+BACKENDS = ['opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe']
 
 def check_make_dir(path):
     if not os.path.exists(path):
@@ -27,7 +30,7 @@ def print_run_time(run_time):
     hour = run_time//3600
     minute = (run_time-3600*hour)//60
     second = run_time-3600*hour-60*minute
-    print (f'该程序运行时间：{hour}小时{minute}分钟{second}秒.')
+    print (f'The program run time：{hour}hours {minute}minutes {second}seconds.')
 
 class run_command_thread(threading.Thread):
     def __init__(self, threadID):
@@ -44,7 +47,7 @@ class run_command_thread(threading.Thread):
         except queue.Empty:
             pass
         except Exception as ex:
-            print("出现如下异常", type(ex), ": ", ex)
+            print(f'The following exception occurs {type(ex)} : {ex}')
             print(traceback.format_exc())
         finally:
             print(self.threadID, ": done!")
@@ -90,7 +93,7 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
         tmp_thread = run_command_thread(threadID=i)
         tmp_thread.start()
 
-    file_video_queue.join() # 等待所有的数据被处理完
+    file_video_queue.join() # Wait for all data to be processed
     print("all video is encoded!")
 
 def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8):
@@ -122,7 +125,7 @@ def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8)
         tmp_thread = run_command_thread(threadID=i)
         tmp_thread.start()
 
-    file_video_queue.join() # 等待所有的数据被处理完
+    file_video_queue.join() # Wait for all data to be processed
     print("all video is encoded!")
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
@@ -149,7 +152,7 @@ To accelerate the infer process, you could install dlib with cuda (followed by h
 class get_face_box_thread(threading.Thread):
     def __init__(self, threadID, faces_locations_path, model="dlib", is_save_video=False):
         threading.Thread.__init__(self)
-        assert(model in backends)
+        assert(model in BACKENDS)
         self.threadID = threadID
         self.faces_locations_path = faces_locations_path
         self.model = model
@@ -158,7 +161,7 @@ class get_face_box_thread(threading.Thread):
             self.detector = FaceDetector.build_model(self.model)
 
     def get_face_location(self, faces_locations, index):
-        assert(self.model in backends)
+        assert(self.model in BACKENDS)
         if self.model == 'dlib':
             return faces_locations[index]
         else:
@@ -174,7 +177,7 @@ class get_face_box_thread(threading.Thread):
             return top, right, bottom, left
 
     def face_detect(self, img_path):
-        assert(self.model in backends)
+        assert(self.model in BACKENDS)
         if self.model == 'dlib':
             raw_image = face_recognition.load_image_file(img_path)
             faces_locations = face_recognition.face_locations(raw_image, number_of_times_to_upsample=0, model="cnn")
@@ -233,7 +236,7 @@ class get_face_box_thread(threading.Thread):
         except queue.Empty:
             pass
         except Exception as ex:
-            print(f'出现如下异常{type(ex)} : {ex}')
+            print(f'The following exception occurs{type(ex)} : {ex}')
             print(traceback.format_exc())
         finally:
             print(self.threadID, ": done!")
@@ -241,7 +244,7 @@ class get_face_box_thread(threading.Thread):
 
 def get_face_box_multi_threads(video_dir_path, faces_locations_path, model='dlib', MAX_THREAD=8, overwrite=False, is_previous_file=True): # flag is_previous_file to divide all file to 2 GPu
     begin_time = time.time()
-    assert(model in backends)
+    assert(model in BACKENDS)
     for dir_path, dir_name_list, file_name_list in os.walk(video_dir_path):
         file_name_list.sort()
         total = len(file_name_list)
@@ -263,134 +266,145 @@ def get_face_box_multi_threads(video_dir_path, faces_locations_path, model='dlib
         tmp_thread.start()
         thread_list.append(tmp_thread)
 
-    file_video_queue.join() # 等待所有的数据被处理完
+    file_video_queue.join() # Wait for all data to be processed
     print("all video is processed!")
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
-class determine_crop_region_thread(threading.Thread):
-    def __init__(self, threadID, video_path, faces_locations_path, crop_face_path):
-        threading.Thread.__init__(self)
-        self.threadID = threadID
-        self.video_path = video_path
-        self.faces_locations_path = faces_locations_path
-        self.crop_face_path = crop_face_path
+def determine_crop_region(counter_np):
+    ret_regions = []
+    height, width = counter_np.shape
+    MAX = np.max(counter_np)
+    threshold = int(MAX*0.95)
+    for height_index in range(height):
+        for width_index in range(width):
+            if(counter_np[height_index, width_index] < threshold):
+                continue # do nothing
+            if(in_the_region(height_index, width_index, ret_regions)):
+                continue # do nothing
+            else:
+                ret_regions.append(get_face_region_by_dilation(counter_np, width_index=width_index, height_index=height_index))
+    return ret_regions
 
-    def determine_crop_region(self, counter_np):
-        ret_regions = []
-        height, width = counter_np.shape
-        MAX = np.max(counter_np)
-        threshold = int(MAX*0.95)
-        for height_index in range(height):
-            for width_index in range(width):
-                if(counter_np[height_index, width_index] < threshold):
-                    continue # do nothing
-                if(self.in_the_region(height_index, width_index, ret_regions)):
-                    continue # do nothing
-                else:
-                    ret_regions.append(self.get_face_region_by_dilation(counter_np, width_index=width_index, height_index=height_index))
-        return ret_regions
+def in_the_region(height_axis, width_axis, regions_list):
+    for top, right, bottom, left in regions_list:
+        if((top <= height_axis <= bottom) and (left <= width_axis <= right)):
+            return True
+    return False
 
-    def in_the_region(self, height_axis, width_axis, regions_list):
-            for top, right, bottom, left in regions_list:
-                if((top <= height_axis <= bottom) and (left <= width_axis <= right)):
-                    return True
-            return False
+def get_face_region_by_dilation(counter_np, width_index, height_index):
+    top = bottom = height_index
+    right = left = width_index
+    height, width = counter_np.shape
+    while((right-left) < width or (bottom-top) < height):
+        left_value = right_value = top_value = bottom_value = 0 # init
+        if(left > 0 and (right-left) < width):
+            left_value = np.sum(counter_np[top:bottom+1,left-1])
+            if(left_value > 0):
+                left -= 1
+        if(right < width - 1 and (right-left) < width):
+            right_value = np.sum(counter_np[top:bottom+1,right:right+1])
+            if(right_value > 0):
+                right += 1
 
-    def get_face_region_by_dilation(self, counter_np, width_index, height_index):
-        top = bottom = height_index
-        right = left = width_index
-        height, width = counter_np.shape
-        while((right-left) < width or (bottom-top) < height):
-            left_value = right_value = top_value = bottom_value = 0 # init
-            if(left > 0 and (right-left) < width):
-                left_value = np.sum(counter_np[top:bottom+1,left-1])
-                if(left_value > 0):
-                    left -= 1
-            if(right < width - 1 and (right-left) < width):
-                right_value = np.sum(counter_np[top:bottom+1,right:right+1])
-                if(right_value > 0):
-                    right += 1
+        if(top > 0 and (bottom-top) < height):
+            top_value = np.sum(counter_np[top-1,left:right+1])
+            if(top_value > 0):
+                top -= 1
+        if(bottom < height - 1 and (bottom-top) < height):
+            bottom_value = np.sum(counter_np[bottom+1,left:right+1])
+            if(bottom_value > 0):
+                bottom += 1
+        if(left_value == 0 and right_value == 0 and top_value == 0 and bottom_value == 0):
+            return (top, right, bottom, left)
+    return (top, right, bottom, left)
 
-            if(top > 0 and (bottom-top) < height):
-                top_value = np.sum(counter_np[top-1,left:right+1])
-                if(top_value > 0):
-                    top -= 1
-            if(bottom < height - 1 and (bottom-top) < height):
-                bottom_value = np.sum(counter_np[bottom+1,left:right+1])
-                if(bottom_value > 0):
-                    bottom += 1
-            if(left_value == 0 and right_value == 0 and top_value == 0 and bottom_value == 0):
-                return (top, right, bottom, left)
-        return (top, right, bottom, left)
+def enlarge_region_box(top, right, bottom, left, height=1080, width=1920, enlarge_ratio=1.5):
+    assert(enlarge_ratio >= 1)
+    new_width = int((right - left) * enlarge_ratio)
+    new_height = int((bottom - top) * enlarge_ratio)
+    delta_top_bottom = int((bottom - top) * (enlarge_ratio - 1) / 2)
+    delta_left_right = int((right - left) * (enlarge_ratio - 1) / 2)
 
-    def enlarge_region_box(self, top, right, bottom, left, height=1080, width=1920, enlarge_ratio=1.5):
-        assert(enlarge_ratio >= 1)
-        new_width = int((right - left) * enlarge_ratio)
-        new_height = int((bottom - top) * enlarge_ratio)
-        delta_top_bottom = int((bottom - top) * (enlarge_ratio - 1) / 2)
-        delta_left_right = int((right - left) * (enlarge_ratio - 1) / 2)
+    if(new_width > (width-1)):
+        ret_right = width-1
+        ret_left = 0
+    elif((left - delta_left_right) < 0):
+        ret_left = 0
+        ret_right = new_width
+    elif((right + delta_left_right) > (width - 1)):
+        ret_right = width-1
+        ret_left = width - 1 - new_width
+    else:
+        ret_left = left - delta_left_right
+        ret_right = right + delta_left_right
 
-        if(new_width > (width-1)):
-            ret_right = width-1
-            ret_left = 0
-        elif((left - delta_left_right) < 0):
-            ret_left = 0
-            ret_right = new_width
-        elif((right + delta_left_right) > (width - 1)):
-            ret_right = width-1
-            ret_left = width - 1 - new_width
-        else:
-            ret_left = left - delta_left_right
-            ret_right = right + delta_left_right
+    if(new_height > (height-1)):
+        ret_bottom = height-1
+        ret_top = 0
+    elif((top - delta_top_bottom) < 0):
+        ret_top = 0
+        ret_bottom = new_height
+    elif((bottom + delta_top_bottom) > (height - 1)):
+        ret_bottom = height-1
+        ret_top = height - 1 - new_height
+    else:
+        ret_top = top - delta_top_bottom
+        ret_bottom = bottom + delta_top_bottom
 
-        if(new_height > (height-1)):
-            ret_bottom = height-1
-            ret_top = 0
-        elif((top - delta_top_bottom) < 0):
-            ret_top = 0
-            ret_bottom = new_height
-        elif((bottom + delta_top_bottom) > (height - 1)):
-            ret_bottom = height-1
-            ret_top = height - 1 - new_height
-        else:
-            ret_top = top - delta_top_bottom
-            ret_bottom = bottom + delta_top_bottom
+    return (ret_top, ret_right, ret_bottom, ret_left)
 
-        return (ret_top, ret_right, ret_bottom, ret_left)
-    def run(self):
-        try:
-            while(True):
-                video_path = file_video_queue.get(block=False, timeout=60)
-                video_name = os.path.split(video_path)[1][:-4]
-                print(f'{video_name} begin!')
+def align_coordinates_to_multiples_4(regions_list):
+    ret_regions_list = []
+    for top, right, bottom, left in regions_list:
+        ret_regions_list.append((
+            (top // 4) * 4,
+            math.ceil(right // 4) * 4,
+            math.ceil(bottom // 4) * 4,
+            (left // 4) *4
+        ))
+    return ret_regions_list
 
+def determine_crop_region_process(threadID, video_path, faces_locations_path, crop_face_path,
+                            file_video_queue, face_info_queue, is_save_crop_video=False):
+    try:
+        while(True):
+            video_path = file_video_queue.get(block=False, timeout=60)
+            video_name = os.path.split(video_path)[1][:-4]
+            print(f'{video_name} begin!')
+
+            if(is_save_crop_video):
                 output_raw_img_dir = decode_video_to_tmp_dir(video_path, video_name)
-                face_locations_json_path = os.path.join(self.faces_locations_path, video_name + ".json")
                 height, width, channels = cv2.imread(os.path.join(output_raw_img_dir, video_name + "_0001.png")).shape
-                counter_np = np.zeros((height, width), dtype="int32") # (1080, 1920)
+            else:
+                height = 1080 # assume all video is 1920x1080
+                width = 1920
+            counter_np = np.zeros((height, width), dtype="int32") # (1080, 1920)
 
-                with open(face_locations_json_path, "r") as fp_in:
-                    load_list = json.load(fp_in) # load json (as list)
-                    for iter_dict in load_list:
-                        frame_index = iter_dict['frame_index']
-                        faces_locations = iter_dict['faces']
-                        if(int(frame_index) > 100):
-                            continue
-                        for location in faces_locations:   
-                            top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
-                            (top, right, bottom, left) = self.enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
-                            counter_np[top:bottom, left:right] += 1
+            face_locations_json_path = os.path.join(faces_locations_path, video_name + ".json")
+            with open(face_locations_json_path, "r") as fp_in:
+                load_list = json.load(fp_in) # load json (as list)
+                for iter_dict in load_list:
+                    frame_index = iter_dict['frame_index']
+                    faces_locations = iter_dict['faces']
+                    if(int(frame_index) > 100):
+                        continue
+                    for location in faces_locations:
+                        top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
+                        (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
+                        counter_np[top:bottom, left:right] += 1
 
-                # determine the best crop region
-                regions = self.determine_crop_region(counter_np)
-                face_info_queue.put((video_name, regions))
+            # determine the best crop region
+            regions = determine_crop_region(counter_np)
+            regions = align_coordinates_to_multiples_4(regions)
+            face_info_queue.put((video_name, regions))
 
-                # show crop region as save as imgs
+            if(is_save_crop_video):
+            # show crop region as save as imgs
                 for region_index in range(len(regions)):
                     top, right, bottom, left = regions[region_index]
-                    # (top, right, bottom, left) = self.enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=1.5)
-                    output_dir_path = os.path.join(self.crop_face_path, video_name + '-' + str(region_index))
+                    # (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=1.5)
+                    output_dir_path = os.path.join(crop_face_path, video_name + '-' + str(region_index))
                     check_make_dir(output_dir_path)
                     for _, _, file_name_list in os.walk(output_raw_img_dir): # every image
                         file_name_list.sort()
@@ -415,7 +429,7 @@ class determine_crop_region_thread(threading.Thread):
                         f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
                         f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
                         f' -vcodec libx264 -pix_fmt yuv420p '
-                        f' {os.path.join(self.crop_face_path, video_name)}-{str(region_index)}.mp4'
+                        f' {os.path.join(crop_face_path, video_name)}-{str(region_index)}.mp4'
                     )
                     os.system(compress_command)
 
@@ -424,19 +438,26 @@ class determine_crop_region_thread(threading.Thread):
 
                 rm_video_dir(output_raw_img_dir)
 
-                file_video_queue.task_done()
-        except queue.Empty:
-            pass
-        except Exception as ex:
-            print("出现如下异常", type(ex), ": ", ex)
-            print(traceback.format_exc())
-        finally:
-            print(f'thread_{self.threadID} : done!')
-            return 0
+            file_video_queue.task_done()
+    except queue.Empty:
+        pass
+    except Exception as ex:
+        print("The following exception occurs", type(ex), ": ", ex)
+        print(traceback.format_exc())
+    finally:
+        print(f'process_{threadID} : done!')
+        return 0
 
-def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, crop_face_path, MAX_THREAD=8):
+# MSRA server container 2 Xeon Gold 5118 Processor, each CPU have 12 core and can run 24 thread.
+# To take full advantage of the server's performance, the args max_process is recommended to be set to 48
+def determine_crop_region_multi_process(videos_dir_path, faces_locations_path, crop_face_path,
+                                        max_process=48, is_save_crop_video=False):
     begin_time = time.time()
     num_video = 0
+    manage = multiprocessing.Manager()
+    file_video_queue = manage.Queue() # should use manage.Queue() in multipeocessing
+    face_info_queue = manage.Queue()
+    pool = multiprocessing.Pool()
     for dir_path, dir_name_list, file_name_list in os.walk(videos_dir_path):
         file_name_list.sort()
         num_video = len(file_name_list)
@@ -444,12 +465,12 @@ def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, c
             video_path = os.path.join(videos_dir_path, video_name)
             file_video_queue.put(video_path)
 
-    print(f'begin to process with {MAX_THREAD} threads, len(file_video_queue) = {file_video_queue.qsize()}')
-    for i in range(MAX_THREAD):
-        tmp_thread = determine_crop_region_thread(i, video_path, faces_locations_path, crop_face_path)
-        tmp_thread.start()
+    print(f'begin to process with {max_process} processes, len(file_video_queue) = {file_video_queue.qsize()}')
+    for i in range(max_process):
+        pool.apply_async(determine_crop_region_process, args=(i, video_path, faces_locations_path, crop_face_path, file_video_queue, face_info_queue, is_save_crop_video, ))
+    pool.close()
+    pool.join()
 
-    file_video_queue.join() # 等待所有的数据被处理完
     with open(os.path.join(faces_locations_path, "all_video_base_" + str(num_video) + '.json'), "w") as fp_out:
         output_json = []
         while not face_info_queue.empty():
@@ -459,8 +480,9 @@ def determine_crop_region_multi_threads(videos_dir_path, faces_locations_path, c
             for top, right, bottom, left in regions:
                 faces_json.append({'top': int(top), 'bottom':int(bottom), 'left':int(left), 'right':int(right)})
 
-            tmp_output_json[video_name] = faces_json
+            tmp_output_json[video_name] = {"frame_start": 0, "frame_end": 100, "faces": faces_json}
             output_json.append(tmp_output_json)
+        assert(len(output_json) > 0)
         json.dump(output_json, fp_out, indent=4)
 
     end_time = time.time()
@@ -517,7 +539,7 @@ def get_static_size(faces_locations_path):
                         static_dict[tmp_key] += 1
 
     remove_key_list = []
-    for key in static_dict.keys(): # can't change the size of dictionary during iteration of them
+    for key in static_dict.keys(): # can't change the size of dictionary during iteration of dictionary
         if(static_dict[key] == 0):
             remove_key_list.append(key)
     for key in remove_key_list:
@@ -543,5 +565,5 @@ if __name__ == "__main__":
     # python ./dataset_prepare.py downsample_video_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --output_video_path ../../data/huiguohe/deepfake_test/downsample_video/ --MAX_THREAD=8
     # CUDA_VISIBLE_DEVICES=0 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=False
     # CUDA_VISIBLE_DEVICES=1 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=True
-    # python ./dataset_prepare.py determine_crop_region_multi_threads --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --crop_face_path ../../data/huiguohe/deepfake_test/crop_face/ --MAX_THREAD 4
+    # python ./dataset_prepare.py determine_crop_region_multi_process --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --crop_face_path ../../data/huiguohe/deepfake_test/crop_face/ --max_process 48
     # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
