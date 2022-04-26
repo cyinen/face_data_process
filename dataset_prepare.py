@@ -105,9 +105,9 @@ def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8)
 
                 video_name = file_name[:-4]
 
-                for down_sample_scale in [2, 4]:
+                for down_sample_scale in [1, 2, 4]:
                     # create output path of videos
-                    output_dir_path = os.path.join(output_video_path, 'x_down' + str(down_sample_scale))
+                    output_dir_path = os.path.join(output_video_path, 'down_x' + str(down_sample_scale))
                     check_make_dir(output_dir_path)
 
                     qp = random.choice(qp_list)
@@ -355,6 +355,29 @@ def enlarge_region_box(top, right, bottom, left, height=1080, width=1920, enlarg
 
     return (ret_top, ret_right, ret_bottom, ret_left)
 
+def enlarge_region_box_ignore_outside(top, right, bottom, left, height=1080, width=1920, enlarge_ratio=1.5):
+    assert(enlarge_ratio >= 1)
+    new_width = int((right - left) * enlarge_ratio)
+    new_height = int((bottom - top) * enlarge_ratio)
+    delta_top_bottom = int((bottom - top) * (enlarge_ratio - 1) / 2)
+    delta_left_right = int((right - left) * (enlarge_ratio - 1) / 2)
+
+    ret_left = left - delta_left_right
+    ret_right = right + delta_left_right
+    if(ret_left < 0):
+        ret_left = 0
+    if(ret_right > (width-1)):
+        ret_right = width-1
+
+    ret_top = top - delta_top_bottom
+    ret_bottom = bottom + delta_top_bottom
+    if(ret_top < 0):
+        ret_top = 0
+    if(ret_bottom > (height-1)):
+        ret_bottom = height-1
+
+    return (ret_top, ret_right, ret_bottom, ret_left)
+
 def align_coordinates_to_multiples_4(regions_list):
     ret_regions_list = []
     for top, right, bottom, left in regions_list:
@@ -428,7 +451,8 @@ def determine_crop_region_process(id, video_path, faces_locations_path, crop_fac
                     continue
                 for location in faces_locations:
                     top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
-                    (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
+                    # (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
+                    (top, right, bottom, left) = enlarge_region_box_ignore_outside(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
                     counter_np[top:bottom, left:right] += 1
 
         # determine the best crop region
@@ -510,7 +534,7 @@ def determine_crop_region_multi_process(videos_dir_path, faces_locations_path, c
     pool.join()
 
     print("all the processes is done, begin to generate json.")
-    with open(os.path.join(faces_locations_path, "_all_video_base_" + str(num_video) + '.json'), "w") as fp_out:
+    with open(os.path.join(faces_locations_path, "_all_video_enlargex2_ingore-outside_" + str(num_video) + '.json'), "w") as fp_out:
         output_json = []
         while not face_info_queue.empty():
             video_name, regions = face_info_queue.get(block=False)
@@ -596,25 +620,103 @@ def get_static_size(faces_locations_path):
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
-def generate_vsr_dataset(video_path, output_dir, info_json_path):
-    gt_dir_path = os.path.join(output_dir, 'gt')
-    x2_dir_path = os.path.join(output_dir, 'down_x2')
-    x4_dir_path = os.path.join(output_dir, 'down_x4')
-    check_make_dir(gt_dir_path)
-    check_make_dir(x2_dir_path)
-    check_make_dir(x4_dir_path)
+def get_video_fullname_by_prefix(video_dir_path, prefix):
+    for dir_path, dir_name_list, file_name_list in os.walk(video_dir_path):
+        for file_name in file_name_list:
+            if(file_name.startswith(prefix)):
+                return file_name[:-4]
+    else:
+        print(f'ERROR: do not found this video: {prefix}.')
+        return None
+
+def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_dir_path, output_dir, faces_info_dict):
+    try:
+        video_name = list(faces_info_dict.keys())[0]
+        frame_start = faces_info_dict[video_name]['frame_start']
+        frame_end = faces_info_dict[video_name]['frame_end']
+        faces_regions_list = faces_info_dict[video_name]['faces']
+
+        # get the video path, including gt videos, downsample x2 and x4 videos.
+        gt_video_path = os.path.join(gt_videos_dir_path, video_name + ".mp4")
+        x2_videos_dir_path = os.path.join(down_video_dir_path, "down_x2")
+        x2_video_name = get_video_fullname_by_prefix(x2_videos_dir_path, video_name)
+        x2_video_path = os.path.join(x2_videos_dir_path, x2_video_name + ".mp4")
+        x4_videos_dir_path = os.path.join(down_video_dir_path, "down_x4")
+        x4_video_name = get_video_fullname_by_prefix(x4_videos_dir_path, video_name)
+        x4_video_path = os.path.join(x4_videos_dir_path, x4_video_name + ".mp4")
+
+        # generate tmp dir to save raw images, which is used to crop later
+        raw_gt_img_dir = decode_video_to_tmp_dir(gt_video_path, video_name)
+        raw_x2_img_dir = decode_video_to_tmp_dir(x2_video_path, x2_video_name)
+        raw_x4_img_dir = decode_video_to_tmp_dir(x4_video_path, x4_video_name)
+
+        for region_index in range(len(faces_regions_list)):
+            # generage output dir
+            output_gt_dir_path = os.path.join(output_dir, 'gt', f'{video_name}-{region_index}')
+            output_x2_dir_path = os.path.join(output_dir, 'down_x2', f'{x2_video_name}-{region_index}')
+            output_x4_dir_path = os.path.join(output_dir, 'down_x4', f'{x4_video_name}-{region_index}')
+            check_make_dir(output_gt_dir_path)
+            check_make_dir(output_x2_dir_path)
+            check_make_dir(output_x4_dir_path)
+            location = faces_regions_list[region_index]
+            top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
+            for frame_index in range(frame_start, frame_end):
+                # crop gt images
+                raw_gt_img_path = os.path.join(raw_gt_img_dir, f'{video_name}_{frame_index:04d}.png')
+                gt_pil_image = Image.open(raw_gt_img_path)
+                gt_pil_image = gt_pil_image.crop((left, top, right, bottom))
+                crop_gt_img_path = os.path.join(output_gt_dir_path, f'{video_name}-{region_index}_{frame_index:04d}.png')
+                gt_pil_image.save(crop_gt_img_path)
+
+                # crop x2 images
+                raw_x2_img_path = os.path.join(raw_x2_img_dir, f'{x2_video_name}_{frame_index:04d}.png')
+                x2_pil_image = Image.open(raw_x2_img_path)
+                x2_pil_image = x2_pil_image.crop((left//2, top//2, right//2, bottom//2))
+                crop_x2_img_path = os.path.join(output_x2_dir_path, f'{x2_video_name}-{region_index}_{frame_index:04d}.png')
+                x2_pil_image.save(crop_x2_img_path)
+
+                # crop x4 images
+                raw_x4_img_path = os.path.join(raw_x4_img_dir, f'{x4_video_name}_{frame_index:04d}.png')
+                x4_pil_image = Image.open(raw_x4_img_path)
+                x4_pil_image = x4_pil_image.crop((left//4, top//4, right//4, bottom//4))
+                crop_x4_img_path = os.path.join(output_x4_dir_path, f'{x4_video_name}-{region_index}_{frame_index:04d}.png')
+                x4_pil_image.save(crop_x4_img_path)
+
+        rm_video_dir(raw_gt_img_dir)
+        rm_video_dir(raw_x2_img_dir)
+        rm_video_dir(raw_x4_img_dir)
+    except Exception as ex:
+        print("The following exception occurs", type(ex), ": ", ex)
+        print(traceback.format_exc())
+    finally:
+        if(processes_id % 100 ==0):
+            print(f'processes {processes_id}({video_name}) is done!')
+        return 0
+
+def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, output_dir, info_json_path, max_process=48):
+    begin_time = time.time()
+
+    # generage output dir
+    output_gt_dir_path = os.path.join(output_dir, 'gt')
+    output_x2_dir_path = os.path.join(output_dir, 'down_x2')
+    output_x4_dir_path = os.path.join(output_dir, 'down_x4')
+    check_make_dir(output_gt_dir_path)
+    check_make_dir(output_x2_dir_path)
+    check_make_dir(output_x4_dir_path)
+
+    processes_num = 0
+    pool = multiprocessing.Pool(processes=max_process)
     with open(info_json_path, "r") as fp_in:
         load_list = json.load(fp_in) # load json (as list)
         for iter_dict in load_list:
-            video_name = iter_dict.keys()[0]
-            frame_start = iter_dict[video_name]['frame_start']
-            frame_end = iter_dict[video_name]['frame_end']
-            for frame_index in range(frame_start, frame_end):
-                faces_list = iter_dict[video_name]['faces']
-                for location in faces_list:
-                    top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
+            pool.apply_async(generate_vsr_dataset_process,
+                        args=(processes_num, gt_videos_dir_path, down_video_dir_path, output_dir, iter_dict, ))
+            processes_num += 1
+    pool.close()
+    pool.join()
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
 
-                    # get down x2 and x4 cropped images here, and save them
 if __name__ == "__main__":
     fire.Fire()
 
@@ -631,4 +733,4 @@ if __name__ == "__main__":
 
 # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
 
-# python ./dataset_prepare.py generate_vsr_dataset --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/
+# python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --down_video_dir_path ../../data/huiguohe/deepfake_test/downsample_video/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --info_json_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/_all_video_base_73.json --max_process 12
