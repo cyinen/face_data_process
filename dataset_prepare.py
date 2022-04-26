@@ -638,6 +638,9 @@ def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_di
 
         # get the video path, including gt videos, downsample x2 and x4 videos.
         gt_video_path = os.path.join(gt_videos_dir_path, video_name + ".mp4")
+        x1_videos_dir_path = os.path.join(down_video_dir_path, "down_x1")
+        x1_video_name = get_video_fullname_by_prefix(x1_videos_dir_path, video_name)
+        x1_video_path = os.path.join(x1_videos_dir_path, x1_video_name + ".mp4")
         x2_videos_dir_path = os.path.join(down_video_dir_path, "down_x2")
         x2_video_name = get_video_fullname_by_prefix(x2_videos_dir_path, video_name)
         x2_video_path = os.path.join(x2_videos_dir_path, x2_video_name + ".mp4")
@@ -647,15 +650,18 @@ def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_di
 
         # generate tmp dir to save raw images, which is used to crop later
         raw_gt_img_dir = decode_video_to_tmp_dir(gt_video_path, video_name)
+        raw_x1_img_dir = decode_video_to_tmp_dir(x1_video_path, x1_video_name)
         raw_x2_img_dir = decode_video_to_tmp_dir(x2_video_path, x2_video_name)
         raw_x4_img_dir = decode_video_to_tmp_dir(x4_video_path, x4_video_name)
 
         for region_index in range(len(faces_regions_list)):
             # generage output dir
             output_gt_dir_path = os.path.join(output_dir, 'gt', f'{video_name}-{region_index}')
+            output_x1_dir_path = os.path.join(output_dir, 'down_x1', f'{x1_video_name}-{region_index}')
             output_x2_dir_path = os.path.join(output_dir, 'down_x2', f'{x2_video_name}-{region_index}')
             output_x4_dir_path = os.path.join(output_dir, 'down_x4', f'{x4_video_name}-{region_index}')
             check_make_dir(output_gt_dir_path)
+            check_make_dir(output_x1_dir_path)
             check_make_dir(output_x2_dir_path)
             check_make_dir(output_x4_dir_path)
             location = faces_regions_list[region_index]
@@ -667,6 +673,13 @@ def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_di
                 gt_pil_image = gt_pil_image.crop((left, top, right, bottom))
                 crop_gt_img_path = os.path.join(output_gt_dir_path, f'{video_name}-{region_index}_{frame_index:04d}.png')
                 gt_pil_image.save(crop_gt_img_path)
+
+                # crop x1 images
+                raw_x1_img_path = os.path.join(raw_x1_img_dir, f'{x1_video_name}_{frame_index:04d}.png')
+                x1_pil_image = Image.open(raw_x1_img_path)
+                x1_pil_image = x1_pil_image.crop((left, top, right, bottom))
+                crop_x1_img_path = os.path.join(output_x1_dir_path, f'{x1_video_name}-{region_index}_{frame_index:04d}.png')
+                x1_pil_image.save(crop_x1_img_path)
 
                 # crop x2 images
                 raw_x2_img_path = os.path.join(raw_x2_img_dir, f'{x2_video_name}_{frame_index:04d}.png')
@@ -683,6 +696,7 @@ def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_di
                 x4_pil_image.save(crop_x4_img_path)
 
         rm_video_dir(raw_gt_img_dir)
+        rm_video_dir(raw_x1_img_dir)
         rm_video_dir(raw_x2_img_dir)
         rm_video_dir(raw_x4_img_dir)
     except Exception as ex:
@@ -698,9 +712,11 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
 
     # generage output dir
     output_gt_dir_path = os.path.join(output_dir, 'gt')
+    output_x1_dir_path = os.path.join(output_dir, 'down_x1')
     output_x2_dir_path = os.path.join(output_dir, 'down_x2')
     output_x4_dir_path = os.path.join(output_dir, 'down_x4')
     check_make_dir(output_gt_dir_path)
+    check_make_dir(output_x1_dir_path)
     check_make_dir(output_x2_dir_path)
     check_make_dir(output_x4_dir_path)
 
