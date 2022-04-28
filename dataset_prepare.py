@@ -14,6 +14,7 @@ import csv
 import random
 import multiprocessing
 import math
+import copy
 
 import face_recognition
 from deepface.detectors import FaceDetector
@@ -130,14 +131,22 @@ def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8)
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
-def decode_video_to_tmp_dir(video_path, video_name):
+def decode_video_to_tmp_dir(video_path, video_name, decode_frames_num=-1):
     output_raw_img_dir = os.path.join('/tmp/tmp_video', video_name)
     check_make_dir(output_raw_img_dir)
-    decode_command = (
-        f'ffmpeg -y -loglevel error -hide_banner -nostats ' 
-        f' -i {video_path} '                                            # input file path
-        f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'     # output file path, should be '#{name}_%04d.png'
-    )
+    if(decode_frames_num <= 0):
+        decode_command = (
+            f'ffmpeg -y -loglevel error -hide_banner -nostats '
+            f' -i {video_path} '                                            # input file path
+            f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'     # output file path, should be '#{name}_%04d.png'
+        )
+    else:
+        decode_command = (
+            f'ffmpeg -y -loglevel error -hide_banner -nostats '
+            f' -i {video_path} '                                            # input file path
+            f' -vframes {decode_frames_num} '                               # number of decoded frames
+            f' {os.path.join(output_raw_img_dir, video_name)}_%04d.png'     # output file path, should be '#{name}_%04d.png'
+        )
     os.system(decode_command)
     return output_raw_img_dir
 
@@ -199,8 +208,9 @@ class get_face_box_thread(threading.Thread):
                 print(video_name, " begin!!")
                 output_raw_img_dir = decode_video_to_tmp_dir(video_path, video_name)
                 output_txt_path = os.path.join(self.faces_locations_path, video_name + ".json")
+
+                output_json = []
                 with open(output_txt_path, "w") as fp_out:
-                    output_json = []
                     for _, _, file_name_list in os.walk(output_raw_img_dir): # every image
                         file_name_list.sort()
                         for file_name in file_name_list:
@@ -430,8 +440,11 @@ def enlarge_to_great_than_256(regions_list, height=1080, width=1920):
 
 def determine_crop_region_process(id, video_path, faces_locations_path, crop_face_path,
                             face_info_queue, is_save_crop_video=False):
+    frame_start, frame_end = (1, 101)
+    face_dict = {}
     try:
         video_name = os.path.split(video_path)[1][:-4]
+        face_dict[video_name] = []
 
         if(is_save_crop_video):
             output_raw_img_dir = decode_video_to_tmp_dir(video_path, video_name)
@@ -442,67 +455,83 @@ def determine_crop_region_process(id, video_path, faces_locations_path, crop_fac
         counter_np = np.zeros((height, width), dtype="int32") # (1080, 1920)
 
         face_locations_json_path = os.path.join(faces_locations_path, video_name + ".json")
+        flag_is_stop = False
         with open(face_locations_json_path, "r") as fp_in:
             load_list = json.load(fp_in) # load json (as list)
+            aver_face_size_list = []
             for iter_dict in load_list:
                 frame_index = iter_dict['frame_index']
                 faces_locations = iter_dict['faces']
-                if(int(frame_index) > 100):
-                    continue
-                for location in faces_locations:
+
+                for location_index in range(len(faces_locations)):
+                    location = faces_locations[location_index]
+                    if(len(aver_face_size_list) < len(faces_locations)):
+                        aver_face_size_list.append([])
                     top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
-                    # (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
                     (top, right, bottom, left) = enlarge_region_box_ignore_outside(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=2)
                     counter_np[top:bottom, left:right] += 1
+                    aver_face_size_list[location_index].append((bottom - top) * (right - left))
 
-        # determine the best crop region
-        regions = determine_crop_region(counter_np) # base region
+                if( int(frame_index) == frame_end-1 ):
+                    # determine the best crop region
+                    regions = determine_crop_region(counter_np) # base region
 
-        # pre-process regions for VSR task
-        regions = remove_small_face(regions, threshold_size=(100,100))
-        regions = enlarge_to_great_than_256(regions, height=1080, width=1920)
-        regions = align_coordinates_to_multiples_4(regions)
+                    # is large motion video?
+                    for i in range(len(regions)):
+                        top, right, bottom, left = regions[i]
+                        region_size = (bottom - top) * (right - left)
+                        if(np.mean(aver_face_size_list[i]) / region_size > 0.6 or int(frame_index) == 300):
+                            flag_is_stop = True
 
-        if(len(regions) > 0):
-            face_info_queue.put((video_name, regions))
+                    # pre-process regions for VSR task
+                    regions = remove_small_face(regions, threshold_size=(200,200))
+                    regions = enlarge_to_great_than_256(regions, height=1080, width=1920)
+                    regions = align_coordinates_to_multiples_4(regions)
 
+                    for region in regions:
+                        tmp_dict = {"face":region, "frame_start":frame_start, "frame_end":frame_end}
+                        face_dict[video_name].append(tmp_dict)
+
+                    if(is_save_crop_video): # show crop region as save as imgs
+                        for region_index in range(len(regions)):
+                            top, right, bottom, left = regions[region_index]
+                            output_dir_path = os.path.join(crop_face_path, video_name + '-' + str(region_index))
+                            check_make_dir(output_dir_path)
+                            for _, _, file_name_list in os.walk(output_raw_img_dir): # every image
+                                file_name_list.sort()
+                                for file_name in file_name_list:
+                                    if(any(file_name.endswith(extension) for extension in ['.png'])):
+                                        frame_index = int(file_name.split(".")[0][-4:])
+                                        if(frame_start <= frame_index < frame_end):
+                                            img_path = os.path.join(output_raw_img_dir, file_name)
+                                            save_crop_img_path = os.path.join(output_dir_path, video_name + '-' + str(region_index) + "_" + file_name[-8:])
+                                            raw_image = cv2.imread(img_path)[:, :, ::-1] # read as BGR, and convert to RGB
+                                            pil_image = Image.fromarray(raw_image)
+                                            draw = ImageDraw.Draw(pil_image)
+                                            draw.rectangle(((left, top), (right, bottom)), outline=(255, 0, 0), width=10)     # red
+                                            pil_image.save(save_crop_img_path)
+
+                            # encode as video
+                            compress_command = (
+                                f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
+                                f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
+                                f' -vcodec libx264 -pix_fmt yuv420p '
+                                f' {os.path.join(crop_face_path, video_name)}-{str(region_index)}.mp4'
+                            )
+                            os.system(compress_command)
+
+                            rm_command = (f'rm -rf {output_dir_path}')
+                            os.system(rm_command)
+
+                    # update for next
+                    frame_start = frame_end
+                    frame_end = frame_end + 100
+
+                if(flag_is_stop):
+                    break
+        if(len(face_dict[video_name]) > 0):
+            face_info_queue.put(face_dict)
         if(is_save_crop_video):
-        # show crop region as save as imgs
-            for region_index in range(len(regions)):
-                top, right, bottom, left = regions[region_index]
-                # (top, right, bottom, left) = enlarge_region_box(top=top, right=right, bottom=bottom, left=left, height=1080, width=1920, enlarge_ratio=1.5)
-                output_dir_path = os.path.join(crop_face_path, video_name + '-' + str(region_index))
-                check_make_dir(output_dir_path)
-                for _, _, file_name_list in os.walk(output_raw_img_dir): # every image
-                    file_name_list.sort()
-                    for file_name in file_name_list:
-                        if(any(file_name.endswith(extension) for extension in ['.png'])):
-                            frame_index = int(file_name.split(".")[0][-4:])
-                            if(frame_index > 100):
-                                continue
-
-                            img_path = os.path.join(output_raw_img_dir, file_name)
-                            save_crop_img_path = os.path.join(output_dir_path, video_name + '-' + str(region_index) + "_" + file_name[-8:])
-                            raw_image = cv2.imread(img_path)[:, :, ::-1] # read as BGR, and convert to RGB
-                            pil_image = Image.fromarray(raw_image)
-                            draw = ImageDraw.Draw(pil_image)
-                            # draw.rectangle(((left, top), (right, bottom)), outline=(0, 0, 255), width=10)   # blue
-                            # draw.rectangle(((left, top), (right, bottom)), outline=(0, 255, 0), width=10)   # green
-                            draw.rectangle(((left, top), (right, bottom)), outline=(255, 0, 0), width=10)     # red
-                            pil_image.save(save_crop_img_path)
-
-                # encode as video
-                compress_command = (
-                    f'ffmpeg -y -loglevel error -hide_banner -nostats -r 30 '
-                    f' -i {os.path.join(output_dir_path, video_name)}-{str(region_index)}_%04d.png '
-                    f' -vcodec libx264 -pix_fmt yuv420p '
-                    f' {os.path.join(crop_face_path, video_name)}-{str(region_index)}.mp4'
-                )
-                os.system(compress_command)
-
-                rm_command = (f'rm -rf {output_dir_path}')
-                os.system(rm_command)
-
             rm_video_dir(output_raw_img_dir)
 
     except Exception as ex:
@@ -535,16 +564,19 @@ def determine_crop_region_multi_process(videos_dir_path, faces_locations_path, c
 
     print("all the processes is done, begin to generate json.")
     with open(os.path.join(faces_locations_path, "_all_video_enlargex2_ingore-outside_" + str(num_video) + '.json'), "w") as fp_out:
-        output_json = []
+        output_json = {}
         while not face_info_queue.empty():
-            video_name, regions = face_info_queue.get(block=False)
-            tmp_output_json = {}
-            faces_json = []
-            for top, right, bottom, left in regions:
-                faces_json.append({'top': int(top), 'bottom':int(bottom), 'left':int(left), 'right':int(right)})
+            # video_name, regions, frame_range = face_info_queue.get(block=False)
+            # frame_start, frame_end = frame_range
+            # tmp_output_json = {}
+            # faces_json = []
+            # for top, right, bottom, left in regions:
+            #     faces_json.append({'top': int(top), 'bottom':int(bottom), 'left':int(left), 'right':int(right)})
 
-            tmp_output_json[video_name] = {"frame_start": 1, "frame_end": 101, "faces": faces_json} # [frame_start, frame_end)
-            output_json.append(tmp_output_json)
+            # tmp_output_json[f'{video_name}-#{frame_start//100}'] = {"frame_start": frame_start, "frame_end": 101, "faces": faces_json} # [frame_start, frame_end)
+            # output_json.append(tmp_output_json)
+            face_dict = face_info_queue.get(block=False)
+            output_json.update(face_dict)
         assert(len(output_json) > 0)
         json.dump(output_json, fp_out, indent=4)
 
