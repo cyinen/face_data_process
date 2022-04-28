@@ -97,7 +97,7 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
     file_video_queue.join() # Wait for all data to be processed
     print("all video is encoded!")
 
-def downsample_video_multi_threads(video_path, output_video_path,  MAX_THREAD=8):
+def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
     begin_time = time.time()
     qp_list = list(range(24, 38, 2))
     for dir_path, dir_name_list, file_name_list in os.walk(video_path):
@@ -489,7 +489,8 @@ def determine_crop_region_process(id, video_path, faces_locations_path, crop_fac
                     regions = align_coordinates_to_multiples_4(regions)
 
                     for region in regions:
-                        tmp_dict = {"face":region, "frame_start":frame_start, "frame_end":frame_end}
+                        tmp_region_dic = {"top":region[0], "right":region[1], "bottom":region[2], "left":region[3]}
+                        tmp_dict = {"face":tmp_region_dic, "frame_start":frame_start, "frame_end":frame_end}
                         face_dict[video_name].append(tmp_dict)
 
                     if(is_save_crop_video): # show crop region as save as imgs
@@ -566,15 +567,6 @@ def determine_crop_region_multi_process(videos_dir_path, faces_locations_path, c
     with open(os.path.join(faces_locations_path, "_all_video_enlargex2_ingore-outside_" + str(num_video) + '.json'), "w") as fp_out:
         output_json = {}
         while not face_info_queue.empty():
-            # video_name, regions, frame_range = face_info_queue.get(block=False)
-            # frame_start, frame_end = frame_range
-            # tmp_output_json = {}
-            # faces_json = []
-            # for top, right, bottom, left in regions:
-            #     faces_json.append({'top': int(top), 'bottom':int(bottom), 'left':int(left), 'right':int(right)})
-
-            # tmp_output_json[f'{video_name}-#{frame_start//100}'] = {"frame_start": frame_start, "frame_end": 101, "faces": faces_json} # [frame_start, frame_end)
-            # output_json.append(tmp_output_json)
             face_dict = face_info_queue.get(block=False)
             output_json.update(face_dict)
         assert(len(output_json) > 0)
@@ -661,13 +653,8 @@ def get_video_fullname_by_prefix(video_dir_path, prefix):
         print(f'ERROR: do not found this video: {prefix}.')
         return None
 
-def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_dir_path, output_dir, faces_info_dict):
+def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, faces_info_dict):
     try:
-        video_name = list(faces_info_dict.keys())[0]
-        frame_start = faces_info_dict[video_name]['frame_start']
-        frame_end = faces_info_dict[video_name]['frame_end']
-        faces_regions_list = faces_info_dict[video_name]['faces']
-
         # get the video path, including gt videos, downsample x2 and x4 videos.
         gt_video_path = os.path.join(gt_videos_dir_path, video_name + ".mp4")
         x1_videos_dir_path = os.path.join(down_video_dir_path, "down_x1")
@@ -686,46 +673,51 @@ def generate_vsr_dataset_process(processes_id, gt_videos_dir_path, down_video_di
         raw_x2_img_dir = decode_video_to_tmp_dir(x2_video_path, x2_video_name)
         raw_x4_img_dir = decode_video_to_tmp_dir(x4_video_path, x4_video_name)
 
-        for region_index in range(len(faces_regions_list)):
+        face_count = 0
+        for face_dict in faces_info_dict:
+            frame_start = face_dict['frame_start']
+            frame_end = face_dict['frame_end']
+            location = face_dict['face']
             # generage output dir
-            output_gt_dir_path = os.path.join(output_dir, 'gt', f'{video_name}-{region_index}')
-            output_x1_dir_path = os.path.join(output_dir, 'down_x1', f'{x1_video_name}-{region_index}')
-            output_x2_dir_path = os.path.join(output_dir, 'down_x2', f'{x2_video_name}-{region_index}')
-            output_x4_dir_path = os.path.join(output_dir, 'down_x4', f'{x4_video_name}-{region_index}')
+            output_gt_dir_path = os.path.join(output_dir, 'gt', f'{video_name}-{face_count}')
+            output_x1_dir_path = os.path.join(output_dir, 'down_x1', f'{x1_video_name}-{face_count}')
+            output_x2_dir_path = os.path.join(output_dir, 'down_x2', f'{x2_video_name}-{face_count}')
+            output_x4_dir_path = os.path.join(output_dir, 'down_x4', f'{x4_video_name}-{face_count}')
             check_make_dir(output_gt_dir_path)
             check_make_dir(output_x1_dir_path)
             check_make_dir(output_x2_dir_path)
             check_make_dir(output_x4_dir_path)
-            location = faces_regions_list[region_index]
             top, right, bottom, left = location['top'], location['right'], location['bottom'], location['left']
             for frame_index in range(frame_start, frame_end):
                 # crop gt images
                 raw_gt_img_path = os.path.join(raw_gt_img_dir, f'{video_name}_{frame_index:04d}.png')
                 gt_pil_image = Image.open(raw_gt_img_path)
                 gt_pil_image = gt_pil_image.crop((left, top, right, bottom))
-                crop_gt_img_path = os.path.join(output_gt_dir_path, f'{video_name}-{region_index}_{frame_index:04d}.png')
+                crop_gt_img_path = os.path.join(output_gt_dir_path, f'{video_name}-{face_count}_{frame_index:04d}.png')
                 gt_pil_image.save(crop_gt_img_path)
 
                 # crop x1 images
                 raw_x1_img_path = os.path.join(raw_x1_img_dir, f'{x1_video_name}_{frame_index:04d}.png')
                 x1_pil_image = Image.open(raw_x1_img_path)
                 x1_pil_image = x1_pil_image.crop((left, top, right, bottom))
-                crop_x1_img_path = os.path.join(output_x1_dir_path, f'{x1_video_name}-{region_index}_{frame_index:04d}.png')
+                crop_x1_img_path = os.path.join(output_x1_dir_path, f'{x1_video_name}-{face_count}_{frame_index:04d}.png')
                 x1_pil_image.save(crop_x1_img_path)
 
                 # crop x2 images
                 raw_x2_img_path = os.path.join(raw_x2_img_dir, f'{x2_video_name}_{frame_index:04d}.png')
                 x2_pil_image = Image.open(raw_x2_img_path)
                 x2_pil_image = x2_pil_image.crop((left//2, top//2, right//2, bottom//2))
-                crop_x2_img_path = os.path.join(output_x2_dir_path, f'{x2_video_name}-{region_index}_{frame_index:04d}.png')
+                crop_x2_img_path = os.path.join(output_x2_dir_path, f'{x2_video_name}-{face_count}_{frame_index:04d}.png')
                 x2_pil_image.save(crop_x2_img_path)
 
                 # crop x4 images
                 raw_x4_img_path = os.path.join(raw_x4_img_dir, f'{x4_video_name}_{frame_index:04d}.png')
                 x4_pil_image = Image.open(raw_x4_img_path)
                 x4_pil_image = x4_pil_image.crop((left//4, top//4, right//4, bottom//4))
-                crop_x4_img_path = os.path.join(output_x4_dir_path, f'{x4_video_name}-{region_index}_{frame_index:04d}.png')
+                crop_x4_img_path = os.path.join(output_x4_dir_path, f'{x4_video_name}-{face_count}_{frame_index:04d}.png')
                 x4_pil_image.save(crop_x4_img_path)
+
+            face_count += 1
 
         rm_video_dir(raw_gt_img_dir)
         rm_video_dir(raw_x1_img_dir)
@@ -755,10 +747,10 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
     processes_num = 0
     pool = multiprocessing.Pool(processes=max_process)
     with open(info_json_path, "r") as fp_in:
-        load_list = json.load(fp_in) # load json (as list)
-        for iter_dict in load_list:
+        load_dict = json.load(fp_in) # load json (as list)
+        for video_name in load_dict:
             pool.apply_async(generate_vsr_dataset_process,
-                        args=(processes_num, gt_videos_dir_path, down_video_dir_path, output_dir, iter_dict, ))
+                        args=(processes_num, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, load_dict[video_name], ))
             processes_num += 1
     pool.close()
     pool.join()
