@@ -97,9 +97,20 @@ def transcode_video_to_image_multi_threads(video_path, img_path,  MAX_THREAD=8):
     file_video_queue.join() # Wait for all data to be processed
     print("all video is encoded!")
 
+def get_gaussian_QP(QP_min=22, QP_max=38, QP_step=2, gaussian_mean=30, gaussian_variance=3):
+    random_num = random.gauss(gaussian_mean, gaussian_variance)
+    random_qp = round(random_num / QP_step) * QP_step
+    while(random_qp < QP_min or random_qp > QP_max):
+        random_num = random.gauss(gaussian_mean, gaussian_variance)
+        random_qp = round(random_num / QP_step) * QP_step
+    return random_qp
+
+def get_uniform_QP(QP_min=22, QP_max=38, QP_step=2):
+    qp_list = list(range(QP_min, QP_max+QP_step, QP_step))
+    return random.choice(qp_list)
+
 def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
     begin_time = time.time()
-    qp_list = list(range(24, 38, 2))
     for dir_path, dir_name_list, file_name_list in os.walk(video_path):
         for file_name in file_name_list:
             if(any(file_name.endswith(extension) for extension in ['.mp4'])):
@@ -111,7 +122,7 @@ def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
                     output_dir_path = os.path.join(output_video_path, 'down_x' + str(down_sample_scale))
                     check_make_dir(output_dir_path)
 
-                    qp = random.choice(qp_list)
+                    qp = get_gaussian_QP()
 
                     command = (
                         f'ffmpeg -y -loglevel error -hide_banner -nostats '
