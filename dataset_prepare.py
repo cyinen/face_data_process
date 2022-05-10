@@ -575,7 +575,7 @@ def determine_crop_region_multi_process(videos_dir_path, faces_locations_path, c
     pool.join()
 
     print("all the processes is done, begin to generate json.")
-    with open(os.path.join(faces_locations_path, "_all_video_enlargex2_ingore-outside_" + str(num_video) + '.json'), "w") as fp_out:
+    with open(os.path.join(faces_locations_path, "_all_video_enlargex2_ignore-outside_multi-sample-large_motion_" + str(num_video) + '.json'), "w") as fp_out:
         output_json = {}
         while not face_info_queue.empty():
             face_dict = face_info_queue.get(block=False)
@@ -664,7 +664,8 @@ def get_video_fullname_by_prefix(video_dir_path, prefix):
         print(f'ERROR: do not found this video: {prefix}.')
         return None
 
-def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, faces_info_dict):
+def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, faces_info_dict,
+                                is_gray=False):
     try:
         # get the video path, including gt videos, downsample x2 and x4 videos.
         gt_video_path = os.path.join(gt_videos_dir_path, video_name + ".mp4")
@@ -704,6 +705,8 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 raw_gt_img_path = os.path.join(raw_gt_img_dir, f'{video_name}_{frame_index:04d}.png')
                 gt_pil_image = Image.open(raw_gt_img_path)
                 gt_pil_image = gt_pil_image.crop((left, top, right, bottom))
+                if(is_gray):
+                    gt_pil_image = gt_pil_image.convert('L')
                 crop_gt_img_path = os.path.join(output_gt_dir_path, f'{video_name}-{face_count}_{frame_index:04d}.png')
                 gt_pil_image.save(crop_gt_img_path)
 
@@ -711,6 +714,8 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 raw_x1_img_path = os.path.join(raw_x1_img_dir, f'{x1_video_name}_{frame_index:04d}.png')
                 x1_pil_image = Image.open(raw_x1_img_path)
                 x1_pil_image = x1_pil_image.crop((left, top, right, bottom))
+                if(is_gray):
+                    x1_pil_image = x1_pil_image.convert('L')
                 crop_x1_img_path = os.path.join(output_x1_dir_path, f'{x1_video_name}-{face_count}_{frame_index:04d}.png')
                 x1_pil_image.save(crop_x1_img_path)
 
@@ -718,6 +723,8 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 raw_x2_img_path = os.path.join(raw_x2_img_dir, f'{x2_video_name}_{frame_index:04d}.png')
                 x2_pil_image = Image.open(raw_x2_img_path)
                 x2_pil_image = x2_pil_image.crop((left//2, top//2, right//2, bottom//2))
+                if(is_gray):
+                    x2_pil_image = x2_pil_image.convert('L')
                 crop_x2_img_path = os.path.join(output_x2_dir_path, f'{x2_video_name}-{face_count}_{frame_index:04d}.png')
                 x2_pil_image.save(crop_x2_img_path)
 
@@ -725,6 +732,8 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 raw_x4_img_path = os.path.join(raw_x4_img_dir, f'{x4_video_name}_{frame_index:04d}.png')
                 x4_pil_image = Image.open(raw_x4_img_path)
                 x4_pil_image = x4_pil_image.crop((left//4, top//4, right//4, bottom//4))
+                if(is_gray):
+                    x4_pil_image = x4_pil_image.convert('L')
                 crop_x4_img_path = os.path.join(output_x4_dir_path, f'{x4_video_name}-{face_count}_{frame_index:04d}.png')
                 x4_pil_image.save(crop_x4_img_path)
 
@@ -742,7 +751,7 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
             print(f'processes {processes_id}({video_name}) is done!')
         return 0
 
-def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, output_dir, info_json_path, max_process=48):
+def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, output_dir, info_json_path, is_gray=False, max_process=48):
     begin_time = time.time()
 
     # generage output dir
@@ -761,10 +770,38 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
         load_dict = json.load(fp_in) # load json (as list)
         for video_name in load_dict:
             pool.apply_async(generate_vsr_dataset_process,
-                        args=(processes_num, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, load_dict[video_name], ))
+                        args=(processes_num, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, load_dict[video_name], is_gray, ))
             processes_num += 1
     pool.close()
     pool.join()
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
+def get_video_dart_value(video_path, detector, decoded_frame_number=5):
+    img_file_list = os.listdir(video_path)
+    img_file_list.sort()
+    aver_dark_value = 0
+    for i in range(decoded_frame_number):
+        img_path = os.path.join(video_path, img_file_list[i])
+        # imgs_gray_pil = Image.open(img_path).convert('L')
+        # aver_dark_value += np.mean(imgs_gray_pil)
+        
+        raw_image = cv2.imread(img_path) # read as BGR
+        faces_locations = FaceDetector.detect_faces(detector, 'retinaface', raw_image, align=False)
+        face, region = faces_locations[0]
+        aver_dark_value += np.mean(face)
+
+    print(aver_dark_value/decoded_frame_number)
+
+def remove_very_dark_video(dataset_dir_path, option="output"):
+    begin_time = time.time()
+    detector = FaceDetector.build_model('retinaface')
+    downx4_video_dir_path = os.path.join(dataset_dir_path, "down_x4")
+    dir_name_list = os.listdir(downx4_video_dir_path)
+    dir_name_list.sort()
+    for video_name in dir_name_list:
+        print(video_name)
+        get_video_dart_value(os.path.join(downx4_video_dir_path, video_name), detector)
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
@@ -775,13 +812,18 @@ if __name__ == "__main__":
 # python ./dataset_prepare.py transcode_video_to_image --video_path ../../data/huiguohe/deepfake_test/raw_video/ --img_path ../../data/huiguohe/deepfake_test/raw_pic/
 # python ./dataset_prepare.py transcode_video_to_image_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --img_path ../../data/huiguohe/deepfake_test/raw_pic/ --MAX_THREAD 16
 
+# 10 hours
 # python ./dataset_prepare.py downsample_video_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --output_video_path ../../data/huiguohe/deepfake_test/downsample_video/ --MAX_THREAD=8
 
+# 100 frames, 16509 videos: 20 hours
 # CUDA_VISIBLE_DEVICES=0 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=False
 # CUDA_VISIBLE_DEVICES=1 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=True
 
+# 1 hours 19 minutes 22 seconds.
 # python ./dataset_prepare.py determine_crop_region_multi_process --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --crop_face_path ../../data/huiguohe/deepfake_test/crop_face/ --max_process 48
 
 # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
 
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --down_video_dir_path ../../data/huiguohe/deepfake_test/downsample_video/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --info_json_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/_all_video_base_73.json --max_process 12
+
+# python ./dataset_prepare.py remove_very_dark_video --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/
