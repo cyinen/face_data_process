@@ -777,6 +777,48 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
+def trans2gray_vsr_dataset(processes_id, clip_path, output_clie_path):
+    try:
+        check_make_dir(output_clie_path)
+        input_imgs_list = os.listdir(clip_path)
+        input_imgs_list.sort()
+        for img_name in input_imgs_list:
+            pil_image = Image.open(os.path.join(clip_path, img_name)).convert('L')
+            output_image_path = os.path.join(output_clie_path, img_name)
+            pil_image.save(output_image_path)
+    except Exception as ex:
+        print("The following exception occurs", type(ex), ": ", ex)
+        print(traceback.format_exc())
+    finally:
+        if(processes_id % 100 ==0):
+            print(f'processes {processes_id} is done!')
+        return 0
+
+def trans2gray_vsr_dataset_multi_process(dataset_dir_path, output_dir, max_process=48):
+    begin_time = time.time()
+
+    processes_num = 0
+    pool = multiprocessing.Pool(processes=max_process)
+
+    file_list = os.listdir(dataset_dir_path)
+    for dir_name in file_list:
+        if(dir_name not in ['gt', 'down_x1', 'down_x2', 'down_x4']):
+            continue
+        dataset_sub_dir_path = os.path.join(dataset_dir_path, dir_name)
+        output_sub_dir_path = os.path.join(output_dir, dir_name)
+        check_make_dir(output_sub_dir_path)
+        for clip_name in os.listdir(dataset_sub_dir_path):
+            clip_path = os.path.join(dataset_sub_dir_path, clip_name)
+            output_clie_path = os.path.join(output_sub_dir_path, clip_name)
+            pool.apply_async(trans2gray_vsr_dataset,
+                        args=(processes_num, clip_path, output_clie_path, ))
+            processes_num += 1
+
+    pool.close()
+    pool.join()
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
 def get_video_dart_value(video_path, detector, decoded_frame_number=5):
     img_file_list = os.listdir(video_path)
     img_file_list.sort()
@@ -825,5 +867,7 @@ if __name__ == "__main__":
 # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
 
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --down_video_dir_path ../../data/huiguohe/deepfake_test/downsample_video/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --info_json_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/_all_video_base_73.json --max_process 12
+
+# python ./dataset_prepare.py trans2gray_vsr_dataset_multi_process --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset_gray/
 
 # python ./dataset_prepare.py remove_very_dark_video --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/
