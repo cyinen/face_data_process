@@ -129,6 +129,10 @@ dmypy.json
 .pyre/
 
 *.mp4
+*.png
+*.yuv
 *.enc
 *.csv
 *.json
+
+release/*
