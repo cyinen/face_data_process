@@ -70,12 +70,15 @@ def compress_video_process(processes_id, video_name, gt_videos_dir_path, output_
             video_name = video_name[:-4]
             tmp_output_dir = os.path.join(tmp_dir_root, video_name)
             check_make_dir(tmp_output_dir)
-            gt_len = 300
-            height, width = 1080, 1920 # fix for deepfake dataset
+            cap = cv2.VideoCapture(gt_video_path)
+            gt_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            # height, width = 1080, 1920 # fix for deepfake dataset
 
         for scale in scale_list:
             bitrate = get_bitrate(scale)
-
+            
             while(True):
                 if(os.path.isdir(gt_video_path)):
                     # transfer *.png to .yuv and down_scale
@@ -162,4 +165,4 @@ def compress_video_multi_process(gt_videos_dir_path, output_dir, scale_list=[1,2
 if __name__ == "__main__":
     # fire.Fire()
     compress_video_multi_process(gt_videos_dir_path="./dataset/raw_video",
-                    output_dir="./downsample_video/", scale_list=[1,2,4], max_process=48)
+                    output_dir="./downsample_video/", scale_list=[1], max_process=12)
