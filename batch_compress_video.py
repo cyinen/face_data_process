@@ -1,6 +1,6 @@
 # -- coding: utf-8 --**
 import os
-# import fire
+import fire
 import time
 import cv2
 import traceback
@@ -162,7 +162,21 @@ def compress_video_multi_process(gt_videos_dir_path, output_dir, scale_list=[1,2
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
+def remove_zero_video(video_dir_path):
+    video_file_list = os.listdir(video_dir_path)
+    video_file_list.sort()
+    for video_file in video_file_list:
+        video_path = os.path.join(video_dir_path, video_file)
+        if(video_file.endswith('.mp4')):
+            video_name, bitrate, scale = video_file[:-4].split('_')        
+            if(os.path.getsize(video_path) == 0):
+                os.remove(video_path)
+
 if __name__ == "__main__":
-    # fire.Fire()
-    compress_video_multi_process(gt_videos_dir_path="./dataset/raw_video",
-                    output_dir="./downsample_video/", scale_list=[1], max_process=12)
+    fire.Fire()
+    # compress_video_multi_process(gt_videos_dir_path="./dataset/raw_video",
+    #                 output_dir="./downsample_video/", scale_list=[1], max_process=12)
+
+    # example:
+    # python ./batch_compress_video.py remove_zero_video --video_dir_path
+
