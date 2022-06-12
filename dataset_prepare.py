@@ -1,11 +1,12 @@
 # -- coding: utf-8 --**
 import threading
 import os
+import shutil
 import json
 import fire
 import queue
 from PIL import Image, ImageDraw
-from matplotlib.pyplot import close
+from matplotlib.pyplot import close, sca
 import numpy as np
 import cv2
 import traceback
@@ -16,8 +17,20 @@ import multiprocessing
 import math
 import copy
 
-import face_recognition
-from deepface.detectors import FaceDetector
+# import face_recognition
+# from deepface.detectors import FaceDetector
+
+# Probability distribution for the cropped_video(.png)
+# pick_bitrate_list = [50,     100,   200,    300,    400,    500,    600,    700,    800,    900]
+# pick_p_list =       [6,      10,     20,     30,     20,     10,      8,      6,      3,      1]
+
+# Probability distribution for the raw_video(.mp4)
+pick_bitrate_list = [300,    400,    500,    600,    700]
+pick_p_list =       [10,     20,     30,     20,     10]
+
+sum_value = sum(pick_p_list) # normalize
+for idx, p in enumerate(pick_p_list):
+    pick_p_list[idx] = p / sum_value
 
 file_video_queue = queue.Queue() # only used for multi-thread
 face_info_queue = queue.Queue()
@@ -109,6 +122,57 @@ def get_uniform_QP(QP_min=22, QP_max=38, QP_step=2):
     qp_list = list(range(QP_min, QP_max+QP_step, QP_step))
     return random.choice(qp_list)
 
+def get_bitrate(scale): # implement bit-rate generator here
+    base_bitrate = np.random.choice(pick_bitrate_list, p=pick_p_list)
+    return int(base_bitrate/scale) # /scale/scale tends to make too much video bitrate to small, so just /scale once
+
+def update_bitrate(bitrate, scale):
+    raw_bitrate = bitrate * scale
+    for idx, br in enumerate(pick_bitrate_list):
+        if(raw_bitrate == br and idx < len(pick_bitrate_list)-1):
+            return pick_bitrate_list[idx+1] / scale
+    return bitrate * 1.5
+
+def get_frame_number(video_path):
+    cap = cv2.VideoCapture(video_path)
+    frame_number = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    # width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    # height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    return frame_number
+
+# remove downsample video that bitrate is too low or too big
+def upgrade_video_bitrate(raw_video_dir, output_video_path):
+    begin_time = time.time()
+    downsample_video_list = os.listdir(output_video_path)
+    assert len(downsample_video_list) == 16509
+    for video_name in downsample_video_list:
+        if any(bitrate_str in video_name for bitrate_str in ['100', '200', '900', '800']):
+            video_path = os.path.join(output_video_path, video_name)
+            # os.system(f'cp ./size0.mp4 {video_path}')
+
+            video_name, bitrate, scale = video_name[:-4].split('_')
+            bitrate = int(bitrate[7:])
+            down_sample_scale = int(scale[-1])
+            raw_video_name = video_name + '.mp4'
+            raw_video_path = os.path.join(raw_video_dir, raw_video_name)
+
+            new_bitrate = 300
+            command = (
+                        f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                        f' -i {raw_video_path}'                # input file path
+                        f' -vf scale={1920//down_sample_scale}:{1080//down_sample_scale}' # resolution of output video, assumed all video is 1080P
+                        # f' -c:v libx264 -qp {str(qp)} '                             # qp
+                        f' -c:v libx264 -b:v {new_bitrate}k '
+                        # f' {os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                        f' {os.path.join(output_video_path, video_name)}_bitrate{str(new_bitrate)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                    )
+            os.system(command)
+            os.remove(video_path)
+
+    print("all video is processed!")
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
 def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
     begin_time = time.time()
     for dir_path, dir_name_list, file_name_list in os.walk(video_path):
@@ -117,20 +181,25 @@ def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
 
                 video_name = file_name[:-4]
 
-                for down_sample_scale in [1, 2, 4]:
+                # for down_sample_scale in [1, 2, 4]:
+                for down_sample_scale in [1]:
                     # create output path of videos
                     output_dir_path = os.path.join(output_video_path, 'down_x' + str(down_sample_scale))
                     check_make_dir(output_dir_path)
 
-                    qp = get_gaussian_QP()
+                    # qp = get_gaussian_QP()
+                    bitrate = get_bitrate(down_sample_scale)
 
                     command = (
                         f'ffmpeg -y -loglevel error -hide_banner -nostats '
                         f' -i {os.path.join(video_path, file_name)}'                # input file path
                         f' -vf scale={1920//down_sample_scale}:{1080//down_sample_scale}' # resolution of output video, assumed all video is 1080P
-                        f' -c:v libx264 -qp {str(qp)} '                             # qp
-                        f' {os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                        # f' -c:v libx264 -qp {str(qp)} '                             # qp
+                        f' -c:v libx264 -b:v {bitrate}k '
+                        # f' {os.path.join(output_dir_path, video_name)}_qp{str(qp)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
+                        f' {os.path.join(output_dir_path, video_name)}_bitrate{str(bitrate)}_x{str(down_sample_scale)}.mp4'  # output file path, should be '#{name}_%04d.png'
                     )
+
                     file_video_queue.put(command)
 
     for i in range(MAX_THREAD):
@@ -719,7 +788,7 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 crop_x1_img_path = os.path.join(output_x1_dir_path, f'{x1_video_name}-{face_count}_{frame_index:04d}.png')
                 x1_pil_image.save(crop_x1_img_path)
 
-                # crop x2 images
+                # # crop x2 images
                 raw_x2_img_path = os.path.join(raw_x2_img_dir, f'{x2_video_name}_{frame_index:04d}.png')
                 x2_pil_image = Image.open(raw_x2_img_path)
                 x2_pil_image = x2_pil_image.crop((left//2, top//2, right//2, bottom//2))
@@ -728,7 +797,7 @@ def generate_vsr_dataset_process(processes_id, video_name, gt_videos_dir_path, d
                 crop_x2_img_path = os.path.join(output_x2_dir_path, f'{x2_video_name}-{face_count}_{frame_index:04d}.png')
                 x2_pil_image.save(crop_x2_img_path)
 
-                # crop x4 images
+                # # crop x4 images
                 raw_x4_img_path = os.path.join(raw_x4_img_dir, f'{x4_video_name}_{frame_index:04d}.png')
                 x4_pil_image = Image.open(raw_x4_img_path)
                 x4_pil_image = x4_pil_image.crop((left//4, top//4, right//4, bottom//4))
@@ -768,7 +837,11 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
     pool = multiprocessing.Pool(processes=max_process)
     with open(info_json_path, "r") as fp_in:
         load_dict = json.load(fp_in) # load json (as list)
-        for video_name in load_dict:
+        # for video_name in load_dict:
+        raw_video_list = os.listdir(gt_videos_dir_path)
+        raw_video_list.sort()
+        for video_file_name in raw_video_list:
+            video_name = video_file_name[:-4]
             pool.apply_async(generate_vsr_dataset_process,
                         args=(processes_num, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, load_dict[video_name], is_gray, ))
             processes_num += 1
@@ -847,6 +920,33 @@ def remove_very_dark_video(dataset_dir_path, option="output"):
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
+# 31 videos need to be re-encode
+# re-encode is still get error when use Teams codec
+def re_encode_emtpy_video_dir(video_root_path, raw_video_path=None, output_raw_video_path=None):
+    count = 0
+    video_dir_list = os.listdir(video_root_path + '/down_x1') # only support x1 here
+    video_dir_list.sort()
+    for video_dir in video_dir_list:
+        video_path = os.path.join(video_root_path, 'down_x1', video_dir)
+        video_png_list = os.listdir(video_path)
+        if len(video_png_list) == 0:
+            count += 1
+            video_name, bitrate_str = video_dir.split('_')
+
+            # get gt video dir. example: lq:zzuvgnjlxi_500-0, gt: zzuvgnjlxi-0
+            clip_face_index = bitrate_str.split("-")[-1]
+            gt_video_name = f'{video_name}-{clip_face_index}'
+            gt_video_path = os.path.join(video_root_path, 'gt', gt_video_name)
+            shutil.rmtree(gt_video_path)
+            shutil.rmtree(video_path)
+
+            # move to dir
+            # src_path = os.path.join(raw_video_path, video_name+".mp4")
+            # dst_path = os.path.join(output_raw_video_path, video_name+".mp4")
+            # shutil.copy(src_path, dst_path)
+    # print(f'there are {count} videos to be re-encode')
+    print(f'discard {count} videos.')
+
 if __name__ == "__main__":
     fire.Fire()
 
@@ -856,6 +956,11 @@ if __name__ == "__main__":
 
 # 10 hours
 # python ./dataset_prepare.py downsample_video_multi_threads --video_path ../../data/huiguohe/deepfake_test/raw_video/ --output_video_path ../../data/huiguohe/deepfake_test/downsample_video/ --MAX_THREAD=8
+
+# 5 hours 29 minutes for X1 only
+# python ./dataset_prepare.py downsample_video_multi_threads --video_path /Data/huiguohe/deepfake/raw_video/ --output_video_path /Data/huiguohe/deepfake/downsample_video_ffmpeg_fixbitrate/ --MAX_THREAD=12
+# python ./dataset_prepare.py upgrade_video_bitrate --raw_video_dir /Data/huiguohe/deepfake/raw_video/ --output_video_path /Data/huiguohe/deepfake/downsample_video_ffmpeg_fixbitrate/down_x1/
+
 
 # 100 frames, 16509 videos: 20 hours
 # CUDA_VISIBLE_DEVICES=0 python ./dataset_prepare.py get_face_box_multi_threads --video_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --MAX_THREAD 4 --model='retinaface' --is_previous_file=False
@@ -867,7 +972,13 @@ if __name__ == "__main__":
 # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
 
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --down_video_dir_path ../../data/huiguohe/deepfake_test/downsample_video/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --info_json_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/_all_video_base_73.json --max_process 12
+# python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path /Data/huiguohe/deepfake/raw_video/ --down_video_dir_path /Data/huiguohe/deepfake/downsample_video_ffmpeg_fixbitrate/ --output_dir /Data/huiguohe/deepfake/deepfake_vsr_dataset_ffmpegbr_gray/ --info_json_path /Data/huiguohe/deepfake/face_location/face_location_retinaface/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 12 is_gray=true
 
+# python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path /Data/huiguohe/deepfake/raw_video/ --down_video_dir_path /home/huiguohe/hehuiguo/ssd/deepfake/downsample_video_teams/ --output_dir  /home/huiguohe/hehuiguo/ssd/deepfake/deepfake_vsr_dataset_teams_gray/ --info_json_path ../../ssd/deepfake/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 12 is_gray=true
+
+# gt,x1,x2,x4 ：17 hours 3 minutes 27 seconds.
 # python ./dataset_prepare.py trans2gray_vsr_dataset_multi_process --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset_gray/
 
 # python ./dataset_prepare.py remove_very_dark_video --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/
+
+# python ./dataset_prepare.py re_encode_emtpy_video_dir --video_root_path /Data/huiguohe/deepfake/deepfake_vsr_dataset_teams_gray/down_x1/ --raw_video_path /Data/huiguohe/deepfake/raw_video/ --output_raw_video_path /Data/huiguohe/deepfake_re_encode/raw_video/
