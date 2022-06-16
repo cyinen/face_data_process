@@ -146,6 +146,7 @@ def compress_video_multi_process(gt_videos_dir_path, output_dir, scale_list=[1,2
     for scale in scale_list:
         down_dir_path = os.path.join(output_dir, f'down_x{scale}')
         check_make_dir(down_dir_path)
+    
 
     processes_num = 0
     pool = multiprocessing.Pool(processes=max_process)
@@ -172,11 +173,110 @@ def remove_zero_video(video_dir_path):
             if(os.path.getsize(video_path) == 0):
                 os.remove(video_path)
 
+def generate_test_dataset_teams(gt_videos_dir_path="./dataset/raw_video",
+                    output_dir="./downsample_video/", scale_list=[1]):
+    model_list = ['very_hard', 'hard', 'medium', 'easy']
+    begin_time = time.time()
+    tmp_dir_root = "./tmp"
+    check_make_dir(tmp_dir_root)
+
+    for scale in scale_list:
+        down_dir_path = os.path.join(output_dir, f'down_x{scale}')
+        check_make_dir(down_dir_path)
+        for model in model_list:
+            model_dir_path = os.path.join(output_dir, f'down_x{scale}', model)
+            check_make_dir(model_dir_path)
+            videos_dir_path = os.path.join(model_dir_path, "videos")
+            check_make_dir(videos_dir_path)
+
+    gt_video_list = os.listdir(gt_videos_dir_path)
+    gt_video_list.sort()
+    for video_name in gt_video_list:
+        gt_video_path = os.path.join(gt_videos_dir_path, video_name)
+        tmp_output_dir = os.path.join(tmp_dir_root, video_name)
+        check_make_dir(tmp_output_dir)
+
+        gt_imgs_list = os.listdir(gt_video_path)
+        gt_imgs_list.sort()
+        gt_len = len(gt_imgs_list)
+        height, width, channels = cv2.imread(os.path.join(gt_video_path, gt_imgs_list[0])).shape
+
+        for scale in scale_list:
+            bitrate = 100 // scale
+            bitrate_step = 50 // scale
+            model_index = 0
+            while(True):
+                # transfer *.png to .yuv and down_scale
+                gt_yuv_file = f' {os.path.join(tmp_output_dir, video_name)}_{width//scale}x{height//scale}.yuv'
+                trans_to_yuv_command = (
+                    f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                    f' -i {gt_video_path}/%08d.png '
+                    f' -vf scale={width//scale}:{height//scale} '
+                    f' -pix_fmt yuv420p '
+                    f' {gt_yuv_file}'
+                )
+                os.system(trans_to_yuv_command)
+
+                # encode yuv video with teams codec MleTest.exe
+                tmp_264_file = os.path.join(
+                    tmp_output_dir, f'down_x{scale}_{model_list[model_index]}_{video_name}_{bitrate}.h264')
+                output_mp4_file = os.path.join(
+                    output_dir, f'down_x{scale}', model_list[model_index], f'{video_name}_{bitrate}.mp4')
+                output_log = os.path.join(tmp_output_dir, f'{video_name}_down_x{scale}.txt')
+
+                os.system(
+                    f'{os.getcwd()}/release/MleTest.exe '
+                    f' -h {height//scale} -w {width//scale} '
+                    f' -rate {bitrate} '
+                    f' -i {gt_yuv_file} '
+                    f' -o {tmp_264_file} '
+                    f' > {output_log} '
+                )
+
+                os.system(
+                    f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                    f' -i {tmp_264_file} '
+                    f' -c copy '
+                    f' {output_mp4_file}'
+                )
+
+                # get number of frames
+                num_frame = get_frame_number(output_log)
+                if num_frame == gt_len:
+                    # decode .mp4 to *.png
+                    output_imgs_dir_path = os.path.join(
+                        output_dir, f'down_x{scale}', model_list[model_index], "videos", video_name)
+                    check_make_dir(output_imgs_dir_path)
+
+                    transcode_command = (
+                        f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                        f' -i {output_mp4_file} '
+                        f' {output_imgs_dir_path}/%08d.png'
+                    )
+                    os.system(transcode_command)
+
+                    model_index += 1
+                    bitrate += bitrate_step * 2 # update bitrate
+                else:
+                    print(f'processes ({video_name}_down_x{scale}): bit-rate({bitrate}) too low, enlarge it')
+                    os.remove(output_mp4_file)
+                    bitrate += bitrate_step
+                if model_index == len(model_list):
+                    break
+
+        rm_video_dir(tmp_output_dir)
+
+
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
+
 if __name__ == "__main__":
     fire.Fire()
     # compress_video_multi_process(gt_videos_dir_path="./dataset/raw_video",
-    #                 output_dir="./downsample_video/", scale_list=[1], max_process=12)
+                    # output_dir="./downsample_video/", scale_list=[1], max_process=2)
+    
+    # generate_test_dataset_teams()
 
-    # example:
-    # python ./batch_compress_video.py remove_zero_video --video_dir_path
-
+# example:
+# python ./batch_compress_video.py remove_zero_video --video_dir_path
