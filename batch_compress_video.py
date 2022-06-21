@@ -107,17 +107,26 @@ def compress_video_process(processes_id, video_name, gt_videos_dir_path, output_
                     os.system(trans_to_yuv_command)
 
                 # encode yuv video with teams codec MleTest.exe
-                output_mp4_file = os.path.join(output_dir, f'down_x{scale}', f'{video_name}_{bitrate}.mp4')
+                tmp_264_file = os.path.join(
+                    tmp_output_dir, f'down_x{scale}_{video_name}_{bitrate}.h264')
+                output_mp4_file = os.path.join(output_dir, f'down_x{scale}', f'{video_name}_{bitrate}_down_x{scale}.mp4')
                 output_log = os.path.join(tmp_output_dir, f'{video_name}_down_x{scale}.txt')
-                teams_codec_encode_command = (
+
+                os.system(
                     f'{os.getcwd()}/release/MleTest.exe '
                     f' -h {height//scale} -w {width//scale} '
                     f' -rate {bitrate} '
                     f' -i {gt_yuv_file} '
-                    f' -o {output_mp4_file} '
+                    f' -o {tmp_264_file} '
                     f' > {output_log} '
                 )
-                status = os.system(teams_codec_encode_command)
+
+                os.system(
+                    f'ffmpeg -y -loglevel error -hide_banner -nostats '
+                    f' -i {tmp_264_file} '
+                    f' -c copy '
+                    f' {output_mp4_file}'
+                )
 
                 # get number of frames
                 num_frame = get_frame_number(output_log)
@@ -125,6 +134,7 @@ def compress_video_process(processes_id, video_name, gt_videos_dir_path, output_
                     break
                 else:
                     print(f'processes {processes_id}({video_name}_down_x{scale}): bit-rate({bitrate}) too low, enlarge it')
+                    os.remove(tmp_264_file)
                     os.remove(output_mp4_file)
                     bitrate = update_bitrate(bitrate,scale)
 
@@ -275,8 +285,21 @@ if __name__ == "__main__":
     fire.Fire()
     # compress_video_multi_process(gt_videos_dir_path="./dataset/raw_video",
                     # output_dir="./downsample_video/", scale_list=[1], max_process=2)
-    
+    # compress_video_multi_process(gt_videos_dir_path="D:/huiguohe/data/deepfake/raw_video/",
+    #                 output_dir="./downsample_video/", scale_list=[1, 2, 4], max_process=10)
+
     # generate_test_dataset_teams()
+    # data_root_path = f'd:/huiguohe/data/deepfake/downsample_video_teams/'
+    # down_x4_path = os.path.join(data_root_path, "down_x4")
+    # file_list = os.listdir(down_x4_path)
+    # file_list.sort()
+    # for video in file_list:
+    #     new_video_name = video[:-4] + '_down_x4' + video[-4:]
+    #     os.rename(os.path.join(down_x4_path, video), os.path.join(down_x4_path, new_video_name))
 
 # example:
+
 # python ./batch_compress_video.py remove_zero_video --video_dir_path
+
+# x2 + x4: 8 hours 30 minutes
+# python ./batch_compress_video.py compress_video_multi_process

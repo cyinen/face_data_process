@@ -212,6 +212,7 @@ def downsample_video_multi_threads(video_path, output_video_path, MAX_THREAD=8):
     print_run_time(round(end_time-begin_time))
 
 def decode_video_to_tmp_dir(video_path, video_name, decode_frames_num=-1):
+    # output_raw_img_dir = os.path.join('c:/tmp/tmp_video', video_name)
     output_raw_img_dir = os.path.join('/tmp/tmp_video', video_name)
     check_make_dir(output_raw_img_dir)
     if(decode_frames_num <= 0):
@@ -231,8 +232,7 @@ def decode_video_to_tmp_dir(video_path, video_name, decode_frames_num=-1):
     return output_raw_img_dir
 
 def rm_video_dir(path):
-    command = (f'rm -rf {path}')
-    os.system(command)
+    shutil.rmtree(path)
 
 """
 This function is based on https://github.com/ageitgey/face_recognition and https://github.com/serengil/deepface
@@ -601,8 +601,7 @@ def determine_crop_region_process(id, video_path, faces_locations_path, crop_fac
                             )
                             os.system(compress_command)
 
-                            rm_command = (f'rm -rf {output_dir_path}')
-                            os.system(rm_command)
+                            shutil.rmtree(output_dir_path)
 
                     # update for next
                     frame_start = frame_end
@@ -842,6 +841,8 @@ def generate_vsr_dataset_multi_process(gt_videos_dir_path, down_video_dir_path, 
         raw_video_list.sort()
         for video_file_name in raw_video_list:
             video_name = video_file_name[:-4]
+            if video_name not in load_dict:
+                continue
             pool.apply_async(generate_vsr_dataset_process,
                         args=(processes_num, video_name, gt_videos_dir_path, down_video_dir_path, output_dir, load_dict[video_name], is_gray, ))
             processes_num += 1
@@ -949,6 +950,11 @@ def re_encode_emtpy_video_dir(video_root_path, raw_video_path=None, output_raw_v
 
 if __name__ == "__main__":
     fire.Fire()
+#    generate_vsr_dataset_multi_process(gt_videos_dir_path='d:/huiguohe/data/deepfake/raw_video/',
+#         down_video_dir_path='d:/huiguohe/data/deepfake/downsample_video_teams/',
+#         output_dir='d:/huiguohe/data/deepfake/deepfake_vsr_dataset_teams_gray/',
+#         info_json_path='d:/huiguohe/data/deepfake/face_location/face_location_retinaface/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json',
+#         max_process=10, is_gray=True)
 
 # example
 # python ./dataset_prepare.py transcode_video_to_image --video_path ../../data/huiguohe/deepfake_test/raw_video/ --img_path ../../data/huiguohe/deepfake_test/raw_pic/
@@ -968,13 +974,17 @@ if __name__ == "__main__":
 
 # 1 hours 19 minutes 22 seconds.
 # python ./dataset_prepare.py determine_crop_region_multi_process --videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/ --crop_face_path ../../data/huiguohe/deepfake_test/crop_face/ --max_process 48
+# python ./dataset_prepare.py determine_crop_region_multi_process --videos_dir_path d:\huiguohe\data\deepfake\raw_video\ --faces_locations_path d:\huiguohe\data\deepfake\face_location/face_location_retinaface\ --crop_face_path d:\huiguohe\data\deepfake\crop_face\ --max_process 40
 
 # python ./dataset_prepare.py get_static_size --faces_locations_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/
 
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path ../../data/huiguohe/deepfake_test/raw_video/ --down_video_dir_path ../../data/huiguohe/deepfake_test/downsample_video/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --info_json_path ../../data/huiguohe/deepfake_test/face_location/face_location_retinaface/_all_video_base_73.json --max_process 12
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path /Data/huiguohe/deepfake/raw_video/ --down_video_dir_path /Data/huiguohe/deepfake/downsample_video_ffmpeg_fixbitrate/ --output_dir /Data/huiguohe/deepfake/deepfake_vsr_dataset_ffmpegbr_gray/ --info_json_path /Data/huiguohe/deepfake/face_location/face_location_retinaface/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 12 is_gray=true
+# python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path /Data/huiguohe/deepfake/raw_video/ --down_video_dir_path /Data/huiguohe/deepfake/downsample_video_teams/ --output_dir /Data/huiguohe/deepfake/deepfake_vsr_dataset_teams_gray/ --info_json_path /Data/huiguohe/deepfake/face_location/face_location_retinaface/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 20 is_gray=true
 
 # python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path /Data/huiguohe/deepfake/raw_video/ --down_video_dir_path /home/huiguohe/hehuiguo/ssd/deepfake/downsample_video_teams/ --output_dir  /home/huiguohe/hehuiguo/ssd/deepfake/deepfake_vsr_dataset_teams_gray/ --info_json_path ../../ssd/deepfake/_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 12 is_gray=true
+
+# python ./dataset_prepare.py generate_vsr_dataset_multi_process --gt_videos_dir_path d:\huiguohe\data\deepfake\raw_video\ --down_video_dir_path d:\huiguohe\data\deepfake\downsample_video_teams\  --output_dir  d:\huiguohe\data\deepfake\deepfake_vsr_dataset_teams_gray\ --info_json_path d:\huiguohe\data\deepfake\face_location\face_location_retinaface\_all_video_enlargex2_ignore-outside_multi-sample-large_motion_16509.json --max_process 10 is_gray=true
 
 # gt,x1,x2,x4 ：17 hours 3 minutes 27 seconds.
 # python ./dataset_prepare.py trans2gray_vsr_dataset_multi_process --dataset_dir_path ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset/ --output_dir ../../data/huiguohe/deepfake_test/deepfake_vsr_dataset_gray/
