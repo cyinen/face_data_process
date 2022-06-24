@@ -1,12 +1,19 @@
 import os
 import fire
 import time
+import shutil
+import platform
 import youtube_dl
 import multiprocessing
 import traceback
 import glob
 import cv2
 from dataset_prepare import print_run_time
+
+if "windows" in platform.system().lower():
+    TMP_ROOT = "C:/tmp/"
+else:
+    TMP_ROOT = "/tmp/"
 
 def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt_times=10):
 
@@ -40,15 +47,16 @@ def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt
             return 0
     print(f"ERROR!!!!!!!!!!!!!!1  {processes_id}({videoid}) attempt_count={attempt_count}", flush=True)
 
-def download_youtube_video_multi_process(VFHQ_meto_info_root, output_video_dir_path, max_process=20):
+def download_youtube_video_multi_process(VFHQ_meta_info_root, output_video_dir_path, max_process=20):
     begin_time = time.time()
 
     processes_num = 0
     pool = multiprocessing.Pool(processes=max_process)
     
-    meta_info_file_list = os.listdir(VFHQ_meto_info_root)
+    meta_info_file_list = os.listdir(VFHQ_meta_info_root)
     meta_info_file_list.sort()
 
+    fp_out = open("./address.txt", 'w')
     down_load_list = []
     for meta_info_file in meta_info_file_list:
         _, videoid, pid, clip_idx, frame_rlt = meta_info_file.split('+')
@@ -58,11 +66,12 @@ def download_youtube_video_multi_process(VFHQ_meto_info_root, output_video_dir_p
                 or os.path.exists(f'{output_video_dir_path}/{videoid}.webm')):
             print(f'{videoid} already exits, skip it.')
             continue
-        pool.apply_async(download_youtube_video,
-                        args=(processes_num, videoid, output_video_dir_path, ))
+        # pool.apply_async(download_youtube_video,
+        #                 args=(processes_num, videoid, output_video_dir_path, ))
         processes_num += 1
         down_load_list.append(videoid)
-        time.sleep(1)
+        # time.sleep(1)
+        fp_out.write(f'https://www.youtube.com/watch?v={videoid}\n')
 
     print(f'wait for {processes_num} processec done.')    
     pool.close()
@@ -71,26 +80,13 @@ def download_youtube_video_multi_process(VFHQ_meto_info_root, output_video_dir_p
     end_time = time.time()
     print_run_time(round(end_time-begin_time))
 
-def get_crop_face(raw_video, VFHQ_meto_info_root, output_video_dir_path):
-    file_info_dict = {}
-    
-    meta_info_file_list = os.listdir(VFHQ_meto_info_root)
-    meta_info_file_list.sort()
-    for meta_info_file in meta_info_file_list:
-        _, videoid, pid, clip_idx, frame_rlt = meta_info_file.split('+')
-        if videoid not in file_info_dict:
-            file_info_dict[videoid] = []
-        file_info_dict[videoid].append(meta_info_file)
-
-    raw_video_list = os.listdir(raw_video)
-    raw_video_list.sort()
-    for raw_video_name in raw_video_list:
-        video_id = raw_video_name.split('.')[0]
-        for meta_info_file in file_info_dict[video_id]:
-            clip_name = meta_info_file[:-4]
+def get_crop_face(processes_id, raw_video_path, VFHQ_meta_info_root, meta_info_file_list, output_video_dir_path):
+    try:
+        for idx, meta_info_file in enumerate(meta_info_file_list):
+            clip_name = meta_info_file.split(".")[0] # rm .mp4 and .webm
             _, videoid, pid, clip_idx, frame_rlt = clip_name.split('+')
 
-            meta_info_file_path = os.path.join(VFHQ_meto_info_root, meta_info_file)
+            meta_info_file_path = os.path.join(VFHQ_meta_info_root, meta_info_file)
             clip_meta_file_fp = open(meta_info_file_path, 'r')
             for line in clip_meta_file_fp:
                 if line.startswith('FPS'):
@@ -109,20 +105,19 @@ def get_crop_face(raw_video, VFHQ_meto_info_root, output_video_dir_path):
             start_t = round(frame_start / float(clip_fps), 5)
             end_t = round(frame_end / float(clip_fps), 5)
 
-            save_clip_root = os.path.join('/tmp/', clip_name)
+            save_clip_root = os.path.join(TMP_ROOT, clip_name)
             os.makedirs(save_clip_root, exist_ok=True)
 
-            save_cropped_face_clip_root = os.path.join(output_video_dir_path, clip_name)
+            save_cropped_face_clip_root = os.path.join(output_video_dir_path, f'{videoid}-{clip_idx}')
             os.makedirs(save_cropped_face_clip_root, exist_ok=True)
             
-            ffmpeg_crop_command = (
+            os.system(
                 f' ffmpeg -loglevel error '
-                f' -i {os.path.join(raw_video, raw_video_name)} '
+                f' -i {raw_video_path} '
                 f' -an -vf "select=between(n\,{frame_start}\,{frame_end}),setpts=PTS-STARTPTS"  '
                 f'-qscale:v 1 -qmin 1 -qmax 1 -vsync 0 '
                 f' {save_clip_root}/%08d.png'
             )
-            os.system(ffmpeg_crop_command)
 
             # crop the HQ frames
             hq_frame_list = sorted(glob.glob(os.path.join(save_clip_root, '*')))
@@ -133,32 +128,76 @@ def get_crop_face(raw_video, VFHQ_meto_info_root, output_video_dir_path):
                 save_cropped_face_path = os.path.join(save_cropped_face_clip_root, f'{basename}.png')
                 cv2.imwrite(save_cropped_face_path, cropped_face, [cv2.IMWRITE_PNG_COMPRESSION, 6])
             
-            ffmpeg_tovideo_command = (
-                f' ffmpeg -loglevel error '
-                f' -i {save_cropped_face_clip_root}/%08d.png '
-                f' -c:v libx264 -crf 0 '
-                f' {output_video_dir_path}/{clip_name}.mp4'
-            )
-            os.system(ffmpeg_tovideo_command)
+            shutil.rmtree(save_clip_root)
+            # ffmpeg_tovideo_command = (
+            #     f' ffmpeg -loglevel error '
+            #     f' -i {save_cropped_face_clip_root}/%08d.png '
+            #     f' -c:v libx264 -crf 0 '
+            #     f' {output_video_dir_path}/{clip_name}.mp4'
+            # )
+            # os.system(ffmpeg_tovideo_command)
+    except Exception as ex:
+        print("process {processes_id}: The following exception occurs", type(ex), ": ", ex)
+        print(traceback.format_exc())
+    finally:
+        if(processes_id % 100 ==0):
+            print(f'processes {processes_id}({videoid}) is done!', flush=True)
+        return 0
+
+def get_crop_face_multi_process(raw_video_dir_path, VFHQ_meta_info_root, output_video_dir_path, max_process=1):
+    begin_time = time.time()
+
+    file_info_dict = {}
+    
+    meta_info_file_list = os.listdir(VFHQ_meta_info_root)
+    meta_info_file_list.sort()
+    for meta_info_file in meta_info_file_list:
+        _, videoid, pid, clip_idx, frame_rlt = meta_info_file.split('+')
+        if videoid not in file_info_dict:
+            file_info_dict[videoid] = []
+        file_info_dict[videoid].append(meta_info_file)
+
+    processes_num = 0
+    pool = multiprocessing.Pool(processes=max_process)
+    
+    raw_video_list = os.listdir(raw_video_dir_path)
+    raw_video_list.sort()
+    for raw_video_name in raw_video_list:
+        if(raw_video_name.endswith(".part")):
+            continue # the video was not download successfully, skip it!
+        raw_video_path = os.path.join(raw_video_dir_path, raw_video_name)
+        video_id = raw_video_name.split('.')[0]
+        pool.apply_async(get_crop_face,
+                        args=(processes_num, raw_video_path, VFHQ_meta_info_root,
+                        file_info_dict[video_id], output_video_dir_path,))
+        processes_num += 1
+    print(f'wait for {processes_num} processec done.')    
+    pool.close()
+    pool.join()
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
 
 if __name__ == "__main__":
     # fire.Fire()
     
-    download_youtube_video_multi_process(
-        VFHQ_meto_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/VFHQ-Train/',
-        output_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/'
-    )
-
     # download_youtube_video_multi_process(
-    #     VFHQ_meto_info_root='/Data/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Train/',
-    #     output_video_dir_path='/Data/huiguohe/VFHQ/raw_video/'
+    #     VFHQ_meta_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/',
+    #     output_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/'
     # )
+
+    get_crop_face_multi_process(
+        raw_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/',
+        VFHQ_meta_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/',
+        output_video_dir_path='D:/huiguohe/data/VFHQ/crop_face/',
+        max_process=10
+    )
     
     # download_youtube_video(processes_id=0, videoid='BU3KBl8IxIw',output_video_dir_path= f'D:/huiguohe/data/VFHQ/raw_video/')
 # example
 
-# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meto_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path /data04/huiguohe/VFHQ/raw_video/
-# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meto_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Train\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
-# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meto_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Test\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
+# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path /data04/huiguohe/VFHQ/raw_video/
+# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Train\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
+# python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Test\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
 
-# python ./download_dataset.py get_crop_face --raw_video /data04/huiguohe/VFHQ/raw_video_test/ --VFHQ_meto_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path ./tmp/
+# python ./download_dataset.py get_crop_face --raw_video /data04/huiguohe/VFHQ/raw_video_test/ --VFHQ_meta_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path ./tmp/
