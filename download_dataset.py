@@ -106,7 +106,7 @@ def download_youtube_video_from_addr_multi_process(output_video_dir_path, max_pr
     processes_num = 0
     pool = multiprocessing.Pool(processes=max_process)
 
-    address_file_fp_in = open("./address_628.txt", 'r')
+    address_file_fp_in = open("./address_40.txt", 'r')
     down_load_list = address_file_fp_in.read().splitlines()
     for addr in down_load_list:
         class_type = addr.split(",")[0]
