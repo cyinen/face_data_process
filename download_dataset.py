@@ -1,3 +1,4 @@
+from cmath import e
 import os
 import fire
 import time
@@ -15,7 +16,7 @@ if "windows" in platform.system().lower():
 else:
     TMP_ROOT = "/tmp/"
 
-def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt_times=10):
+def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt_times=3):
 
     ydl_opts = {
             'format': 'bestvideo/best',
@@ -23,8 +24,8 @@ def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt
             # 'merge_output_format': 'mp4',
             # 'format': '133',
             'ignore-errors': True,
-            # 'external_downloader': 'aria2c',
-            # 'external_downloader_args': [f'--log=/tmp/aria2c_{videoid}.log ', f'--max-concurrent-downloads={10}', f'--max-connection-per-server={4}'],
+            'external_downloader': 'aria2c',
+            'external_downloader_args': [f'--log=/tmp/aria2c_{videoid}.log ', f'--max-concurrent-downloads={10}', f'--max-connection-per-server={4}'],
             'quiet': True # Do not print messages to stdout.
         }
 
@@ -46,6 +47,23 @@ def download_youtube_video(processes_id, videoid, output_video_dir_path, attempt
                 print(f'processes {processes_id}({videoid}) is done!', flush=True)
             return 0
     print(f"ERROR!!!!!!!!!!!!!!1  {processes_id}({videoid}) attempt_count={attempt_count}", flush=True)
+
+def download_youtube_video_yt_dlp(processes_id, class_type, videoid, height, output_video_dir_path, attempt_times=3):
+    try:
+        os.system(
+                f' yt-dlp --quiet '
+                f' -o "{output_video_dir_path}/{height}p/{class_type}_{videoid}.mp4" '
+                f' "https://www.youtube.com/watch?v={videoid}" '
+                f' -S "height:{height}" '
+                f' -f "bv[ext=mp4]" '
+            )
+    except Exception as ex:
+        print(f"{processes_id}({class_type}_{videoid}): The following exception occurs: {type(ex)} {ex}", flush=True)
+        print(traceback.format_exc())
+    finally:
+        if(processes_id % 100 ==0):
+            print(f'processes {processes_id}({videoid}) is done!', flush=True)
+        return 0
 
 def download_youtube_video_multi_process(VFHQ_meta_info_root, output_video_dir_path, max_process=20):
     begin_time = time.time()
@@ -72,6 +90,33 @@ def download_youtube_video_multi_process(VFHQ_meta_info_root, output_video_dir_p
         down_load_list.append(videoid)
         # time.sleep(1)
         fp_out.write(f'https://www.youtube.com/watch?v={videoid}\n')
+
+    print(f'wait for {processes_num} processec done.')    
+    pool.close()
+    pool.join()
+    print(f'There are {processes_num} videos to be download.')
+    end_time = time.time()
+    print_run_time(round(end_time-begin_time))
+
+def download_youtube_video_from_addr_multi_process(output_video_dir_path, max_process=20):
+    os.makedirs(f"{output_video_dir_path}/1080p", exist_ok=True)
+    os.makedirs(f"{output_video_dir_path}/360p", exist_ok=True)
+    begin_time = time.time()
+
+    processes_num = 0
+    pool = multiprocessing.Pool(processes=max_process)
+
+    address_file_fp_in = open("./address_628.txt", 'r')
+    down_load_list = address_file_fp_in.read().splitlines()
+    for addr in down_load_list:
+        class_type = addr.split(",")[0]
+        addr = addr.split(",")[1]
+        videoid = addr.split('?v=')[-1]
+        pool.apply_async(download_youtube_video_yt_dlp,
+                        args=(processes_num, class_type, videoid,1080, output_video_dir_path, ))
+        pool.apply_async(download_youtube_video_yt_dlp,
+                        args=(processes_num, class_type, videoid, 360, output_video_dir_path, ))
+        processes_num += 1
 
     print(f'wait for {processes_num} processec done.')    
     pool.close()
@@ -179,19 +224,19 @@ def get_crop_face_multi_process(raw_video_dir_path, VFHQ_meta_info_root, output_
 
 
 if __name__ == "__main__":
-    # fire.Fire()
-    
-    # download_youtube_video_multi_process(
+    fire.Fire()
+    download_youtube_video_from_addr_multi_process("tmp")
+    # download_youtube_video_from_addr_multi_process(
     #     VFHQ_meta_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/',
     #     output_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/'
     # )
 
-    get_crop_face_multi_process(
-        raw_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/',
-        VFHQ_meta_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/',
-        output_video_dir_path='D:/huiguohe/data/VFHQ/crop_face/',
-        max_process=10
-    )
+    # get_crop_face_multi_process(
+    #     raw_video_dir_path='D:/huiguohe/data/VFHQ/raw_video/',
+    #     VFHQ_meta_info_root='D:/huiguohe/data/VFHQ/VFHQ_meta_info/',
+    #     output_video_dir_path='D:/huiguohe/data/VFHQ/crop_face/',
+    #     max_process=10
+    # )
     
     # download_youtube_video(processes_id=0, videoid='BU3KBl8IxIw',output_video_dir_path= f'D:/huiguohe/data/VFHQ/raw_video/')
 # example
@@ -199,5 +244,7 @@ if __name__ == "__main__":
 # python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path /data04/huiguohe/VFHQ/raw_video/
 # python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Train\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
 # python ./download_dataset.py download_youtube_video_multi_process --VFHQ_meta_info_root D:\huiguohe\data\VFHQ\VFHQ_meta_info\VFHQ-Test\ --output_video_dir_path D:\huiguohe\data\VFHQ\raw_video\
+
+# python ./download_dataset.py download_youtube_video_from_addr_multi_process --output_video_dir_path /data04/huiguohe/VFHQ/raw_video/
 
 # python ./download_dataset.py get_crop_face --raw_video /data04/huiguohe/VFHQ/raw_video_test/ --VFHQ_meta_info_root /data04/huiguohe/VFHQ/VFHQ_meta_info/VFHQ-Test/ --output_video_dir_path ./tmp/
